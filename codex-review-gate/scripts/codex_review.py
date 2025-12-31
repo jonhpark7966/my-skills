@@ -92,8 +92,8 @@ def windows_escape(prompt: str) -> str:
 # Shell Command Execution
 # ============================================================================
 
-def run_shell_command(cmd: List[str]) -> Generator[str, None, None]:
-    """Execute command and stream output line-by-line."""
+def run_shell_command(cmd: List[str], timeout: int = 1800) -> Generator[str, None, None]:
+    """Execute command and stream output line-by-line with timeout."""
     env = os.environ.copy()
     _augment_path_env(env)
 
@@ -129,6 +129,8 @@ def run_shell_command(cmd: List[str]) -> Generator[str, None, None]:
 
     output_queue: queue.Queue[Optional[str]] = queue.Queue()
     GRACEFUL_SHUTDOWN_DELAY = 0.3
+    start_time = time.time()
+    timed_out = False
 
     def is_turn_completed(line: str) -> bool:
         try:
@@ -153,6 +155,14 @@ def run_shell_command(cmd: List[str]) -> Generator[str, None, None]:
     thread.start()
 
     while True:
+        # Check timeout
+        elapsed = time.time() - start_time
+        if elapsed > timeout:
+            timed_out = True
+            process.terminate()
+            output_queue.put(None)
+            break
+
         try:
             line = output_queue.get(timeout=0.5)
             if line is None:
@@ -161,6 +171,9 @@ def run_shell_command(cmd: List[str]) -> Generator[str, None, None]:
         except queue.Empty:
             if process.poll() is not None and not thread.is_alive():
                 break
+
+    if timed_out:
+        yield f'{{"type":"error","message":"Timeout after {timeout} seconds"}}'
 
     try:
         process.wait(timeout=10)
@@ -362,6 +375,12 @@ def main():
         action="store_true",
         help="Include full reasoning trace in output"
     )
+    parser.add_argument(
+        "--timeout",
+        type=int,
+        default=int(os.environ.get("CODEX_REVIEW_TIMEOUT", "1800")),
+        help="Timeout in seconds (default: 1800 = 30 minutes). Env: CODEX_REVIEW_TIMEOUT"
+    )
 
     args = parser.parse_args()
 
@@ -389,11 +408,11 @@ def main():
 
     # Build Codex command
     # Using read-only sandbox + never ask approval for full automation
-    # Note: --full-auto sets --sandbox workspace-write, so we use -a never separately
+    # Note: --full-auto sets --sandbox workspace-write, so we use config instead
     cmd = [
         "codex", "exec",
         "--sandbox", "read-only",
-        "-a", "never",
+        "-c", 'approval_policy="never"',
         "--cd", args.cd,
         "--json",
         "--skip-git-repo-check",
@@ -421,7 +440,7 @@ def main():
     thread_id = None
     start_time = datetime.now()
 
-    for line in run_shell_command(cmd):
+    for line in run_shell_command(cmd, timeout=args.timeout):
         try:
             line_dict = json.loads(line.strip())
             if all_messages is not None:

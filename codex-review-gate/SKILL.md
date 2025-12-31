@@ -120,6 +120,7 @@ python scripts/codex_review.py \
 | `--log-dir` | No | ./codex-review-logs | Log directory |
 | `--session-id` | No | - | Resume previous session |
 | `--return-all-messages` | No | false | Include full reasoning trace |
+| `--timeout` | No | 1800 (30min) | Timeout in seconds. Env: `CODEX_REVIEW_TIMEOUT` |
 
 ### Output Format
 
