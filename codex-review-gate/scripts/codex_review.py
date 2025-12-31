@@ -338,14 +338,14 @@ def main():
     )
     parser.add_argument(
         "--model",
-        default="gpt-5.2",
-        help="Model to use (e.g., gpt-5, gpt-5.2, gpt-5-codex)"
+        default=os.environ.get("CODEX_MODEL", ""),
+        help="Model to use (e.g., gpt-5, gpt-5.2). Env: CODEX_MODEL"
     )
     parser.add_argument(
         "--reasoning-effort",
-        default="xhigh",
+        default=os.environ.get("CODEX_REASONING_EFFORT", "high"),
         choices=["none", "low", "medium", "high", "xhigh"],
-        help="Reasoning effort level (default: xhigh for thorough review)"
+        help="Reasoning effort level. Env: CODEX_REASONING_EFFORT (default: high)"
     )
     parser.add_argument(
         "--log-dir",
@@ -365,9 +365,16 @@ def main():
 
     args = parser.parse_args()
 
-    # Prepare code content
+    # Prepare code content - resolve path relative to --cd if not absolute
     code_content = args.code
-    if os.path.isfile(args.code):
+    code_path = Path(args.code)
+    if not code_path.is_absolute():
+        code_path = Path(args.cd) / code_path
+    if code_path.is_file():
+        with open(code_path, 'r', encoding='utf-8') as f:
+            code_content = f.read()
+    elif os.path.isfile(args.code):
+        # Fallback: try original path as-is
         with open(args.code, 'r', encoding='utf-8') as f:
             code_content = f.read()
 
@@ -381,13 +388,12 @@ def main():
         review_prompt = windows_escape(review_prompt)
 
     # Build Codex command
-    # Using read-only sandbox + full-auto for safe automation
+    # Using read-only sandbox for safe automation (no --full-auto to avoid sandbox override)
     cmd = [
         "codex", "exec",
         "--sandbox", "read-only",
         "--cd", args.cd,
         "--json",
-        "--full-auto",
         "--skip-git-repo-check",
     ]
 
@@ -406,7 +412,7 @@ def main():
     log_file = setup_logging(log_dir)
 
     # Execute review
-    all_messages = []
+    all_messages = [] if args.return_all_messages else None
     agent_messages = ""
     success = True
     err_message = ""
@@ -416,7 +422,8 @@ def main():
     for line in run_shell_command(cmd):
         try:
             line_dict = json.loads(line.strip())
-            all_messages.append(line_dict)
+            if all_messages is not None:
+                all_messages.append(line_dict)
 
             item = line_dict.get("item", {})
             item_type = item.get("type", "")

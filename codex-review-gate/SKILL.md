@@ -24,8 +24,8 @@ Request structured code review from Codex CLI, evaluate pass/fail verdict, and m
 │     └─ Summarize: what was done, what changed, why          │
 │                                                             │
 │  2. REQUEST REVIEW (scripts/codex_review.py)                │
-│     └─ sandbox: read-only, full-auto                        │
-│     └─ reasoning: high (thorough review)                    │
+│     └─ sandbox: read-only (safe, no file modifications)     │
+│     └─ reasoning: high (default, configurable via env)      │
 │                                                             │
 │  3. EVALUATE VERDICT                                        │
 │     ├─ PASS → Proceed to next task                          │
@@ -113,12 +113,13 @@ python scripts/codex_review.py \
 | Parameter | Required | Default | Description |
 |-----------|----------|---------|-------------|
 | `--context` | Yes | - | Task description and changes made |
-| `--code` | Yes | - | File path or inline code/diff to review |
+| `--code` | Yes | - | File path (relative to --cd) or inline code/diff |
 | `--cd` | Yes | - | Project root directory |
-| `--model` | No | default | Model (gpt-5, gpt-5-codex, etc.) |
-| `--reasoning-effort` | No | high | none/low/medium/high/xhigh |
+| `--model` | No | Codex default | Model. Env: `CODEX_MODEL` |
+| `--reasoning-effort` | No | high | none/low/medium/high/xhigh. Env: `CODEX_REASONING_EFFORT` |
 | `--log-dir` | No | ./codex-review-logs | Log directory |
 | `--session-id` | No | - | Resume previous session |
+| `--return-all-messages` | No | false | Include full reasoning trace |
 
 ### Output Format
 
@@ -240,8 +241,9 @@ The review runs with these safe defaults:
 | Setting | Value | Reason |
 |---------|-------|--------|
 | sandbox | read-only | Cannot modify files |
-| full-auto | enabled | No manual approvals needed |
 | skip-git-repo-check | enabled | Works outside git repos |
+
+Note: `--full-auto` is intentionally NOT used to avoid overriding sandbox settings.
 
 For HPC/Slurm environments, add `--yolo` flag if Landlock errors occur.
 
