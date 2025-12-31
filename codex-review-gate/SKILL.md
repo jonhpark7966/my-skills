@@ -241,9 +241,10 @@ The review runs with these safe defaults:
 | Setting | Value | Reason |
 |---------|-------|--------|
 | sandbox | read-only | Cannot modify files |
+| -a never | enabled | Full automation without approval prompts |
 | skip-git-repo-check | enabled | Works outside git repos |
 
-Note: `--full-auto` is intentionally NOT used to avoid overriding sandbox settings.
+Note: `--full-auto` is intentionally NOT used because it overrides sandbox to `workspace-write`. Instead, we use `-a never` separately to achieve automation while keeping `read-only` sandbox.
 
 For HPC/Slurm environments, add `--yolo` flag if Landlock errors occur.
 

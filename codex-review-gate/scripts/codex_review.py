@@ -388,10 +388,12 @@ def main():
         review_prompt = windows_escape(review_prompt)
 
     # Build Codex command
-    # Using read-only sandbox for safe automation (no --full-auto to avoid sandbox override)
+    # Using read-only sandbox + never ask approval for full automation
+    # Note: --full-auto sets --sandbox workspace-write, so we use -a never separately
     cmd = [
         "codex", "exec",
         "--sandbox", "read-only",
+        "-a", "never",
         "--cd", args.cd,
         "--json",
         "--skip-git-repo-check",
