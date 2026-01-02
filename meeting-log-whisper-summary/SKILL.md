@@ -15,6 +15,9 @@ Automate the JJ_Vault meeting log pipeline: infer the meeting date, organize fil
 
 - Notes markdown file, typically `JJ_Vault/meeting_logs/YYMMDD.md`.
 - Audio recording file (e.g., `.m4a`).
+
+**If either file is not provided, ask the user for the missing file path(s) before proceeding.**
+
 - If filenames do not contain a date, request the date explicitly.
 
 ### 2) Prepare folder + transcription
