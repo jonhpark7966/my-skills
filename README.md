@@ -36,3 +36,35 @@ export CODEX_REASONING_EFFORT="xhigh"  # Optional: none/low/medium/high/xhigh
 - "check this code"
 - "run review gate"
 - "get codex review"
+
+---
+
+### meeting-log-whisper-summary
+
+Automate JJ_Vault meeting log processing: organize files into date folders, run Whisper transcription, and draft AI summaries.
+
+- **Inputs**: Notes markdown file + audio recording (m4a/wav)
+- **Outputs**: `YYMMDD/` folder with audio, SRT transcript, and `ai_summary.md`
+- **Whisper Model**: medium (default), language: ko
+
+#### Usage
+
+```bash
+python meeting-log-whisper-summary/scripts/prepare_meeting_log.py \
+  --notes /path/to/YYMMDD.md \
+  --audio /path/to/recording.m4a \
+  --model medium \
+  --language ko
+```
+
+#### Options
+
+- `--mode copy|move`: Copy or move audio file (default: copy)
+- `--date YYMMDD`: Override date if not in filename
+- `--force`: Overwrite existing files
+- `--no-whisper`: Skip transcription, only organize files
+
+#### Triggers
+
+- Providing a meeting notes file and audio recording
+- Asking to transcribe and summarize a meeting
