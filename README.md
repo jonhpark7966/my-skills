@@ -68,3 +68,36 @@ python meeting-log-whisper-summary/scripts/prepare_meeting_log.py \
 
 - Providing a meeting notes file and audio recording
 - Asking to transcribe and summarize a meeting
+
+---
+
+### yt-dlp-whisper-shorts
+
+Download YouTube audio with yt-dlp, transcribe with Whisper to create timestamped subtitles (SRT), then analyze the transcript to recommend 15–60s Shorts-ready highlight segments.
+
+- **Requirements**: `yt-dlp`, `whisper` in PATH
+- **Outputs**: Audio (mp3), SRT transcript, highlights.md/json
+
+#### Usage
+
+```bash
+python yt-dlp-whisper-shorts/scripts/yt_to_shorts.py "<YOUTUBE_URL>" \
+  --language ko \
+  --min-sec 15 \
+  --max-sec 60 \
+  --count 3
+```
+
+#### Options
+
+- `--language`: Whisper language code (e.g., ko for Korean)
+- `--min-sec`, `--max-sec`: Segment length range (default: 15-60s)
+- `--count`: Number of highlight picks (default: 3)
+- `--no-download`: Skip yt-dlp download
+- `--no-transcribe`: Skip Whisper transcription
+- `--srt-file`: Use existing SRT file
+
+#### Triggers
+
+- Providing a YouTube URL and asking for Shorts highlights
+- Asking to transcribe and analyze a video for clips
