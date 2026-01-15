@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shutil
 import subprocess
@@ -17,9 +18,28 @@ class Cue:
     text: str
 
 
+@dataclass(frozen=True)
+class Chapter:
+    start_s: float
+    end_s: float
+    title: str
+
+
+@dataclass(frozen=True)
+class Chunk:
+    start_s: float
+    end_s: float
+    cues: list[Cue]
+    chapter_title: str | None = None
+
+
 SRT_TS_RE = re.compile(
     r"(?P<start>\d{2}:\d{2}:\d{2}[,.]\d{3})\s*-->\s*(?P<end>\d{2}:\d{2}:\d{2}[,.]\d{3})"
 )
+
+CHUNK_DURATION_THRESHOLD_S = 20 * 60  # 20 minutes
+CHUNK_TARGET_S = 10 * 60  # 10 minutes per chunk
+CHUNK_OVERLAP_S = 3 * 60  # 3 minutes overlap
 
 
 def _parse_timestamp_s(ts: str) -> float:
@@ -92,6 +112,107 @@ def _parse_text(path: Path) -> list[Cue]:
     return cues
 
 
+def _parse_chapters(path: Path) -> list[Chapter]:
+    """Parse chapters from JSON file (yt-dlp format) or simple text."""
+    text = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        data = json.loads(text)
+        if isinstance(data, list):
+            chapters = []
+            for item in data:
+                start = item.get("start_time", 0)
+                end = item.get("end_time", start + 600)
+                title = item.get("title", "Untitled")
+                chapters.append(Chapter(start_s=start, end_s=end, title=title))
+            return chapters
+        if isinstance(data, dict) and "chapters" in data:
+            chapters = []
+            for item in data["chapters"]:
+                start = item.get("start_time", 0)
+                end = item.get("end_time", start + 600)
+                title = item.get("title", "Untitled")
+                chapters.append(Chapter(start_s=start, end_s=end, title=title))
+            return chapters
+    except json.JSONDecodeError:
+        pass
+    # Try simple text format: "MM:SS Title" or "HH:MM:SS Title"
+    chapters = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r"^(?P<ts>[\d:]+)\s+(?P<title>.+)$", line)
+        if m:
+            ts_parts = m.group("ts").split(":")
+            if len(ts_parts) == 2:
+                start_s = int(ts_parts[0]) * 60 + int(ts_parts[1])
+            else:
+                start_s = int(ts_parts[0]) * 3600 + int(ts_parts[1]) * 60 + int(ts_parts[2])
+            chapters.append(Chapter(start_s=start_s, end_s=start_s, title=m.group("title")))
+    # Fix end times
+    for i in range(len(chapters) - 1):
+        chapters[i] = Chapter(start_s=chapters[i].start_s, end_s=chapters[i + 1].start_s, title=chapters[i].title)
+    return chapters
+
+
+def _filter_cues(cues: list[Cue], start_s: float, end_s: float) -> list[Cue]:
+    return [c for c in cues if c.end_s > start_s and c.start_s < end_s]
+
+
+def _chunk_by_chapters(cues: list[Cue], chapters: list[Chapter]) -> list[Chunk]:
+    """Split cues by chapter boundaries."""
+    chunks = []
+    for ch in chapters:
+        ch_cues = _filter_cues(cues, ch.start_s, ch.end_s)
+        if ch_cues:
+            chunks.append(Chunk(start_s=ch.start_s, end_s=ch.end_s, cues=ch_cues, chapter_title=ch.title))
+    return chunks
+
+
+def _chunk_by_time(cues: list[Cue], target_s: float, overlap_s: float) -> list[Chunk]:
+    """Split cues into time-based chunks with overlap."""
+    if not cues:
+        return []
+    total_duration = cues[-1].end_s - cues[0].start_s
+    if total_duration <= CHUNK_DURATION_THRESHOLD_S:
+        return [Chunk(start_s=cues[0].start_s, end_s=cues[-1].end_s, cues=cues)]
+
+    chunks = []
+    current_start = cues[0].start_s
+    end_time = cues[-1].end_s
+
+    while current_start < end_time:
+        chunk_end = current_start + target_s
+        chunk_cues = _filter_cues(cues, current_start, chunk_end)
+        if chunk_cues:
+            actual_end = min(chunk_end, chunk_cues[-1].end_s)
+            chunks.append(Chunk(start_s=current_start, end_s=actual_end, cues=chunk_cues))
+        current_start = chunk_end - overlap_s
+        if current_start >= end_time:
+            break
+
+    return chunks
+
+
+def _smart_chunk(cues: list[Cue], chapters: list[Chapter] | None) -> list[Chunk]:
+    """Smart chunking: use chapters if available, fall back to time-based."""
+    if chapters:
+        chunks = _chunk_by_chapters(cues, chapters)
+        # If any chapter is too long, sub-chunk it
+        final_chunks = []
+        for chunk in chunks:
+            duration = chunk.end_s - chunk.start_s
+            if duration > CHUNK_DURATION_THRESHOLD_S:
+                sub_chunks = _chunk_by_time(chunk.cues, CHUNK_TARGET_S, CHUNK_OVERLAP_S)
+                for i, sc in enumerate(sub_chunks):
+                    title = f"{chunk.chapter_title} (Part {i + 1})" if chunk.chapter_title else None
+                    final_chunks.append(Chunk(start_s=sc.start_s, end_s=sc.end_s, cues=sc.cues, chapter_title=title))
+            else:
+                final_chunks.append(chunk)
+        return final_chunks
+    return _chunk_by_time(cues, CHUNK_TARGET_S, CHUNK_OVERLAP_S)
+
+
 def _format_cues(cues: list[Cue]) -> str:
     lines: list[str] = []
     for cue in cues:
@@ -110,11 +231,23 @@ def _require_exe(name: str) -> str:
     return path
 
 
-def _render_prompt(template: str, title: str, transcript: str, language: str) -> str:
+def _render_chunk_prompt(template: str, title: str, description: str, transcript: str, language: str, chapter_title: str | None) -> str:
+    chapter_context = f"\nCurrent chapter: {chapter_title}" if chapter_title else ""
     return (
         template.replace("<TITLE>", title)
+        .replace("<DESCRIPTION>", description)
         .replace("<LANGUAGE>", language)
+        .replace("<CHAPTER_CONTEXT>", chapter_context)
         .replace("<TRANSCRIPT>", transcript)
+    )
+
+
+def _render_merge_prompt(template: str, title: str, description: str, chunk_outputs: str, language: str) -> str:
+    return (
+        template.replace("<TITLE>", title)
+        .replace("<DESCRIPTION>", description)
+        .replace("<LANGUAGE>", language)
+        .replace("<CHUNK_OUTPUTS>", chunk_outputs)
     )
 
 
@@ -144,16 +277,26 @@ def main() -> None:
     parser.add_argument("--input", required=True, type=Path, help="Input transcript (SRT/VTT/TXT)")
     parser.add_argument("--output", required=True, type=Path, help="Output Markdown path")
     parser.add_argument("--title", default="Untitled", help="Document title")
+    parser.add_argument("--description", default="", help="Video description for context")
+    parser.add_argument("--chapters", type=Path, help="Chapters file (JSON or text format)")
     parser.add_argument("--language", default="Korean", help="Transcript language label")
     parser.add_argument(
         "--template",
         type=Path,
-        default=Path(__file__).resolve().parent.parent / "references" / "codex-summary-template.md",
-        help="Prompt template path",
+        default=Path(__file__).resolve().parent.parent / "references" / "codex-chunk-template.md",
+        help="Chunk prompt template path",
+    )
+    parser.add_argument(
+        "--merge-template",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent / "references" / "codex-merge-template.md",
+        help="Merge prompt template path",
     )
     parser.add_argument("--model", default="gpt-5.2", help="Codex model")
-    parser.add_argument("--reasoning", default="high", help="Reasoning effort")
-    parser.add_argument("--dry-run", action="store_true", help="Write prompt only; skip Codex call")
+    parser.add_argument("--chunk-reasoning", default="medium", help="Reasoning effort for chunks")
+    parser.add_argument("--merge-reasoning", default="high", help="Reasoning effort for merge")
+    parser.add_argument("--dry-run", action="store_true", help="Write prompts only; skip Codex calls")
+    parser.add_argument("--keep-chunks", action="store_true", help="Keep intermediate chunk files")
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -167,16 +310,55 @@ def main() -> None:
 
     if not cues:
         raise RuntimeError("No cues parsed. Provide SRT/VTT or timestamped text.")
-    transcript = _format_cues(cues)
+
+    chapters = None
+    if args.chapters and args.chapters.exists():
+        chapters = _parse_chapters(args.chapters)
+
+    chunks = _smart_chunk(cues, chapters)
     template = args.template.read_text(encoding="utf-8")
-    prompt = _render_prompt(template, args.title, transcript, args.language)
-    prompt_path = args.output.with_suffix(".prompt.txt")
-    prompt_path.write_text(prompt, encoding="utf-8")
+
+    out_dir = args.output.parent
+    out_dir.mkdir(parents=True, exist_ok=True)
+    chunks_dir = out_dir / "chunks"
+    chunks_dir.mkdir(parents=True, exist_ok=True)
+
+    chunk_outputs: list[str] = []
+
+    for idx, chunk in enumerate(chunks, start=1):
+        transcript = _format_cues(chunk.cues)
+        prompt = _render_chunk_prompt(
+            template, args.title, args.description, transcript, args.language, chunk.chapter_title
+        )
+        prompt_path = chunks_dir / f"chunk_{idx:03d}.prompt.txt"
+        output_path = chunks_dir / f"chunk_{idx:03d}.md"
+        prompt_path.write_text(prompt, encoding="utf-8")
+
+        if not args.dry_run:
+            if not output_path.exists() or not output_path.read_text(encoding="utf-8").strip():
+                _run_codex(prompt_path, output_path, args.model, args.chunk_reasoning)
+            chunk_outputs.append(output_path.read_text(encoding="utf-8"))
 
     if args.dry_run:
         return
 
-    _run_codex(prompt_path, args.output, args.model, args.reasoning)
+    # If single chunk, use directly
+    if len(chunk_outputs) == 1:
+        args.output.write_text(chunk_outputs[0], encoding="utf-8")
+    else:
+        # Merge chunks
+        merge_template = args.merge_template.read_text(encoding="utf-8")
+        combined = "\n\n---\n\n".join(chunk_outputs)
+        merge_prompt = _render_merge_prompt(merge_template, args.title, args.description, combined, args.language)
+        merge_prompt_path = out_dir / "merge.prompt.txt"
+        merge_prompt_path.write_text(merge_prompt, encoding="utf-8")
+        _run_codex(merge_prompt_path, args.output, args.model, args.merge_reasoning)
+
+    # Cleanup
+    if not args.keep_chunks:
+        for f in chunks_dir.iterdir():
+            f.unlink()
+        chunks_dir.rmdir()
 
 
 if __name__ == "__main__":
