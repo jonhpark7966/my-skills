@@ -35,6 +35,7 @@ python3 scripts/translate_srt_codex.py --input source.srt --output ko.srt --meta
 3. Normalize cues to single-line (no line breaks).
 4. Translate in 3-minute chunks with 30-second overlap using Codex CLI.
 5. Merge translated chunks and export both `.srt` and `.vtt`.
+6. Claude final review and direct edits before delivery.
 
 ## Step 1: Fetch metadata and manual subtitle inventory
 
@@ -111,6 +112,34 @@ Export `.vtt`:
 ```bash
 ffmpeg -i output.srt output.vtt
 ```
+
+## Step 6: Claude final review and approval
+
+After the translation pipeline completes, Claude must review the final SRT output before delivery.
+
+Review process:
+
+1. Read the complete translated SRT file(s).
+2. If the SRT is longer than 30 minutes of content, split into 30-minute segments and spawn parallel agents to review each segment.
+3. Check for:
+   - Translation accuracy and naturalness
+   - Missing or duplicated cues
+   - Inconsistent terminology or names
+   - Awkward phrasing that doesn't match spoken Korean
+   - Timing issues (cues too short to read)
+4. Make direct edits to fix any issues found.
+5. Report a summary of changes made (if any) to the user.
+
+For long SRTs (30+ minutes):
+
+```
+Segment 1 (00:00 - 30:00) → Agent 1 reviews
+Segment 2 (30:00 - 60:00) → Agent 2 reviews
+Segment 3 (60:00 - 90:00) → Agent 3 reviews
+...
+```
+
+Each agent reads the source SRT (for reference) and the translated segment, makes corrections directly, then reports findings. After all agents complete, merge the reviewed segments back into the final output.
 
 ## Expected outputs
 
