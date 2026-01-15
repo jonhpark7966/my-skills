@@ -120,7 +120,15 @@ def _download_audio(url: str, out_dir: Path, video_id: str) -> Path:
     return audio_path
 
 
-def _whisper_transcribe(audio_path: Path, out_dir: Path, model: str, language: str | None) -> Path:
+def _whisper_transcribe(
+    audio_path: Path,
+    out_dir: Path,
+    model: str,
+    language: str | None,
+    word_timestamps: bool,
+    max_words_per_line: int | None,
+    max_line_count: int | None,
+) -> Path:
     _require_exe("whisper")
     out_dir.mkdir(parents=True, exist_ok=True)
     srt_path = out_dir / f"{audio_path.stem}.srt"
@@ -138,6 +146,12 @@ def _whisper_transcribe(audio_path: Path, out_dir: Path, model: str, language: s
     ]
     if language:
         cmd.extend(["--language", language])
+    if word_timestamps:
+        cmd.extend(["--word_timestamps", "True"])
+        if max_words_per_line:
+            cmd.extend(["--max_words_per_line", str(max_words_per_line)])
+        if max_line_count:
+            cmd.extend(["--max_line_count", str(max_line_count)])
     _run(cmd)
     if not srt_path.exists():
         raise RuntimeError(f"Whisper finished but SRT not found: {srt_path}")
@@ -249,6 +263,21 @@ def main() -> None:
     parser.add_argument("--source-lang", help="Override detected source language")
     parser.add_argument("--whisper-language", help="Whisper language hint")
     parser.add_argument("--model", default="turbo", help="Whisper model")
+    parser.add_argument(
+        "--whisper-word-timestamps",
+        dest="whisper_word_timestamps",
+        action="store_true",
+        default=True,
+        help="Enable Whisper word-level timestamps",
+    )
+    parser.add_argument(
+        "--no-whisper-word-timestamps",
+        dest="whisper_word_timestamps",
+        action="store_false",
+        help="Disable Whisper word-level timestamps",
+    )
+    parser.add_argument("--whisper-max-words", type=int, default=8, help="Max words per line (requires word timestamps)")
+    parser.add_argument("--whisper-max-line-count", type=int, default=1, help="Max lines per segment")
     parser.add_argument("--chunk-seconds", type=float, default=180.0, help="Chunk size in seconds")
     parser.add_argument("--overlap-seconds", type=float, default=30.0, help="Chunk overlap in seconds")
     parser.add_argument("--max-workers", type=int, default=20, help="Parallel workers")
@@ -361,7 +390,15 @@ def main() -> None:
                 source_srt_path.write_text(candidate_whisper.read_text(encoding="utf-8"), encoding="utf-8")
             else:
                 audio_path = _download_audio(args.url, out_dir, video_id)
-                whisper_srt = _whisper_transcribe(audio_path, out_dir, args.model, args.whisper_language)
+                whisper_srt = _whisper_transcribe(
+                    audio_path,
+                    out_dir,
+                    args.model,
+                    args.whisper_language,
+                    args.whisper_word_timestamps,
+                    args.whisper_max_words,
+                    args.whisper_max_line_count,
+                )
                 source_srt_path.write_text(whisper_srt.read_text(encoding="utf-8"), encoding="utf-8")
         _normalize_file(source_srt_path, args.max_chars, args.min_duration)
         if args.source_lang:

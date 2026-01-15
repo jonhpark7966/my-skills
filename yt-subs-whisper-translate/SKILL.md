@@ -60,11 +60,13 @@ yt-dlp --skip-download --write-subs --sub-lang "en,ko,zh,zh-Hans,zh-Hant" --sub-
 Whisper (when no manual subs or only auto captions):
 
 ```bash
-whisper "<AUDIO_FILE>" --model turbo --output_format srt --output_dir ./subs
+whisper "<AUDIO_FILE>" --model turbo --output_format srt --output_dir ./subs \
+  --word_timestamps True --max_words_per_line 8 --max_line_count 1
 ```
 
 If the source language is known (e.g., Chinese), pass `--language zh` to Whisper.
 If a Whisper SRT already exists in the output folder (e.g., `source.srt`), skip Whisper and reuse it.
+To control words per cue in this skill, use `--whisper-max-words` and `--whisper-max-line-count` when running `scripts/yt_subs_whisper_translate.py`.
 
 Language handling:
 - Manual `en` -> translate to `ko`.
