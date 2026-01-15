@@ -92,6 +92,48 @@ def _escape_sub_path(path: Path) -> str:
     return escaped
 
 
+def _get_video_height(video_path: Path) -> int:
+    """Get video height using ffprobe."""
+    _require_exe("ffprobe")
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "stream=height",
+        "-of", "csv=p=0",
+        str(video_path),
+    ]
+    try:
+        out = _run(cmd, capture=True)
+        return int(out.strip())
+    except (subprocess.CalledProcessError, ValueError):
+        return 1080  # default to 1080p
+
+
+def _get_font_size_for_resolution(height: int) -> int:
+    """Return appropriate font size based on video height."""
+    if height <= 720:
+        return 12
+    elif height <= 1080:
+        return 15
+    elif height <= 1440:
+        return 20
+    else:  # 4K and above
+        return 27
+
+
+def _get_margin_for_resolution(height: int) -> int:
+    """Return appropriate margin based on video height."""
+    if height <= 720:
+        return 35
+    elif height <= 1080:
+        return 50
+    elif height <= 1440:
+        return 65
+    else:  # 4K and above
+        return 90
+
+
 def _burn_in(
     video_path: Path,
     out_path: Path,
@@ -99,11 +141,18 @@ def _burn_in(
 ) -> None:
     _require_exe("ffmpeg")
 
+    # Detect resolution and scale font
+    height = _get_video_height(video_path)
+    font_size = _get_font_size_for_resolution(height)
+    margin_v = _get_margin_for_resolution(height)
+
     filters = []
     ko_path = _escape_sub_path(ko_srt)
     filters.append(
-        "subtitles='{path}':force_style='FontName=Noto Sans,FontSize=15,Outline=2,Shadow=1,Alignment=2,MarginV=50'".format(
-            path=ko_path
+        "subtitles='{path}':force_style='FontName=Noto Sans,FontSize={font_size},Outline=2,Shadow=1,Alignment=2,MarginV={margin_v}'".format(
+            path=ko_path,
+            font_size=font_size,
+            margin_v=margin_v,
         )
     )
     vf = ",".join(filters)
@@ -118,7 +167,19 @@ def _burn_in(
         "copy",
         str(out_path),
     ]
-    _run(cmd)
+    try:
+        _run(cmd)
+    except subprocess.CalledProcessError as exc:
+        error_msg = (
+            f"ffmpeg burn-in failed.\n"
+            f"Possible causes:\n"
+            f"  - Font 'Noto Sans' not installed (install via: brew install font-noto-sans)\n"
+            f"  - Invalid SRT file format (check {ko_srt})\n"
+            f"  - Insufficient disk space\n"
+            f"  - Video codec not supported\n"
+            f"Command was: {' '.join(cmd)}"
+        )
+        raise RuntimeError(error_msg) from exc
 
 
 def _translate_metadata(title: str, description: str, prompt_path: Path, dry_run: bool) -> dict:
@@ -204,9 +265,19 @@ def main() -> None:
         parser.error("Provide a URL or --input-video")
 
     if args.ko_srt is None:
-        parser.error("--ko-srt is required")
+        parser.error(
+            "--ko-srt is required.\n"
+            "If you don't have a Korean subtitle file yet, use yt-subs-whisper-translate first:\n"
+            "  python3 yt-subs-whisper-translate/scripts/yt_subs_whisper_translate.py \"<URL>\"\n"
+            "This will generate ko.srt in the output folder."
+        )
     if not args.ko_srt.exists():
-        raise RuntimeError(f"Korean SRT not found: {args.ko_srt}")
+        raise RuntimeError(
+            f"Korean SRT not found: {args.ko_srt}\n"
+            f"If you need to generate Korean subtitles, use yt-subs-whisper-translate first:\n"
+            f"  python3 yt-subs-whisper-translate/scripts/yt_subs_whisper_translate.py \"<URL>\"\n"
+            f"This will create ko.srt that you can use with --ko-srt."
+        )
 
     video_id = args.video_id
     meta_path = args.meta
