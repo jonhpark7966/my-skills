@@ -169,16 +169,47 @@ def _burn_in(
     filters.append(f"subtitles='{ko_path}':force_style='{force_style}'")
     vf = ",".join(filters)
 
+    # Check for NVENC support
+    nvenc_available = False
+    try:
+        check = subprocess.run(
+            ["ffmpeg", "-encoders"],
+            capture_output=True,
+            text=True,
+        )
+        nvenc_available = "h264_nvenc" in check.stdout
+    except Exception:
+        pass
+
     cmd = [
         "ffmpeg",
+        "-y",  # Overwrite output
         "-i",
         str(video_path),
         "-vf",
         vf,
-        "-c:a",
-        "copy",
-        str(out_path),
     ]
+
+    if nvenc_available:
+        # Use NVIDIA GPU encoding (much faster)
+        print("Using NVENC GPU encoding", file=sys.stderr)
+        cmd.extend([
+            "-c:v", "h264_nvenc",
+            "-preset", "p4",  # Balanced speed/quality
+            "-cq", "23",  # Constant quality
+        ])
+    else:
+        print("NVENC not available, using CPU encoding", file=sys.stderr)
+        cmd.extend([
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
+        ])
+
+    cmd.extend([
+        "-c:a", "copy",
+        str(out_path),
+    ])
     try:
         _run(cmd)
     except subprocess.CalledProcessError as exc:
