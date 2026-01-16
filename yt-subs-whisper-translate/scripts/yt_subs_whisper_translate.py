@@ -86,38 +86,59 @@ def _download_audio(url: str, out_dir: Path, video_id: str) -> Path:
 
 
 def _detect_audio_language(audio_path: Path) -> str:
-    """Detect audio language using Whisper."""
+    """Detect audio language using Whisper.
+
+    Runs Whisper without --language flag to trigger auto-detection.
+    Whisper prints 'Detected language: X' to stderr.
+    """
     _require_exe("whisper")
     logger.info("Detecting audio language with Whisper...")
     start = time.time()
 
-    # Use whisper with --task detect_language (short sample)
-    cmd = [
-        "whisper",
-        str(audio_path),
-        "--model", "turbo",
-        "--task", "detect_language",
-        "--output_format", "txt",
-        "--output_dir", str(audio_path.parent),
-    ]
-    try:
-        out = _run(cmd, capture=True)
-        elapsed = time.time() - start
+    # Run whisper without --language to trigger auto-detection
+    # Use tiny model for fast detection, output to temp dir
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmpdir:
+        cmd = [
+            "whisper",
+            str(audio_path),
+            "--model", "tiny",  # Fast model for detection
+            "--output_format", "txt",
+            "--output_dir", tmpdir,
+        ]
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,  # 2 min timeout
+            )
+            elapsed = time.time() - start
 
-        # Parse detected language from output
-        # Whisper outputs: "Detected language: English"
-        for line in out.splitlines():
-            if "detected language" in line.lower():
-                lang = line.split(":")[-1].strip().lower()
-                lang_code = _language_to_code(lang)
-                logger.info(f"Detected audio language: {lang} ({lang_code}) in {elapsed:.1f}s")
-                return lang_code
-    except Exception as e:
-        logger.warning(f"Language detection failed: {e}")
+            # Whisper prints "Detected language: English" to stderr
+            output = proc.stderr + proc.stdout
+            for line in output.splitlines():
+                if "detected language" in line.lower():
+                    # Extract language name after colon
+                    lang = line.split(":")[-1].strip().lower()
+                    # Remove any trailing info like probability
+                    lang = lang.split()[0] if lang else "english"
+                    lang_code = _language_to_code(lang)
+                    logger.info(f"Detected audio language: {lang} ({lang_code}) in {elapsed:.1f}s")
+                    return lang_code
 
-    # Fallback: transcribe short segment and detect from text
-    logger.info("Fallback: detecting language from transcription...")
-    return "en"  # Default to English
+            # If no explicit detection message, check if transcription succeeded
+            if proc.returncode == 0:
+                logger.warning("Language detection: no explicit language found, defaulting to 'en'")
+                return "en"
+
+        except subprocess.TimeoutExpired:
+            logger.warning("Language detection timed out")
+        except Exception as e:
+            logger.warning(f"Language detection failed: {e}")
+
+    logger.info("Fallback: defaulting to English")
+    return "en"
 
 
 def _language_to_code(lang_name: str) -> str:
