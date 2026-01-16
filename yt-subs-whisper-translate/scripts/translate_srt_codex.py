@@ -5,12 +5,22 @@ from __future__ import annotations
 import argparse
 import concurrent.futures
 import json
+import logging
 import re
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from srt_utils import SrtEntry, chunk_entries, format_srt, normalize_entries, parse_srt, write_srt, write_vtt
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
 def _require_exe(name: str) -> str:
@@ -233,6 +243,13 @@ def main() -> None:
     if not chunks:
         raise RuntimeError("No subtitle entries to translate")
 
+    total_duration = max(e.end_s for e in entries) if entries else 0.0
+    logger.info(f"Input: {len(entries)} entries, {total_duration/60:.1f} min total duration")
+    logger.info(f"Chunking: {len(chunks)} chunks ({args.chunk_seconds}s each, {args.overlap_seconds}s overlap)")
+    logger.info(f"Chunk model: {args.chunk_model}, reasoning: {args.chunk_reasoning}")
+    if args.merge_pass:
+        logger.info(f"Merge model: {args.merge_model}, reasoning: {args.merge_reasoning}")
+
     out_dir = args.output.parent
     out_dir.mkdir(parents=True, exist_ok=True)
     chunks_dir = out_dir / f"chunks_{args.target_lang}"
@@ -246,6 +263,7 @@ def main() -> None:
         chunk_srt_path = chunks_dir / f"chunk_{idx:03d}.srt"
         write_srt(chunk.entries, chunk_srt_path)
         chunk_specs.append((chunk.start_s, chunk.end_s, chunk_srt_path))
+        logger.debug(f"Chunk {idx}/{len(chunks)}: {chunk.start_s/60:.1f}-{chunk.end_s/60:.1f} min, {len(chunk.entries)} entries")
 
         prompt_text = _render_prompt(
             template=template,
@@ -264,9 +282,21 @@ def main() -> None:
         output_paths.append(output_path)
 
     if args.dry_run:
+        logger.info("Dry run: copying source chunks as output")
         for chunk_path, output_path in zip([c[2] for c in chunk_specs], output_paths):
             output_path.write_text(chunk_path.read_text(encoding="utf-8"), encoding="utf-8")
     else:
+        # Count how many chunks need translation (skip already completed)
+        chunks_to_translate = sum(
+            1 for output_path in output_paths
+            if not (output_path.exists() and output_path.stat().st_size > 0)
+        )
+        if chunks_to_translate < len(output_paths):
+            logger.info(f"Skipping {len(output_paths) - chunks_to_translate} already translated chunks")
+        logger.info(f"Translating {chunks_to_translate} chunks with {args.max_workers} workers...")
+
+        translation_start = time.time()
+        completed = 0
         with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
             futures = []
             for prompt_path, output_path in zip(prompt_paths, output_paths):
@@ -275,6 +305,11 @@ def main() -> None:
                 futures.append(executor.submit(_run_codex, prompt_path, output_path, args.chunk_model, args.chunk_reasoning))
             for fut in concurrent.futures.as_completed(futures):
                 fut.result()
+                completed += 1
+                if completed % 5 == 0 or completed == chunks_to_translate:
+                    logger.info(f"Translation progress: {completed}/{chunks_to_translate} chunks")
+        translation_elapsed = time.time() - translation_start
+        logger.info(f"Translation completed in {translation_elapsed:.1f}s ({translation_elapsed/60:.1f} min)")
 
     translated_chunks: list[tuple[float, float, list[SrtEntry]]] = []
     for (chunk_start, chunk_end, _chunk_path), output_path in zip(chunk_specs, output_paths):
@@ -290,11 +325,13 @@ def main() -> None:
     merge_output_paths: list[Path] = []
 
     if args.merge_pass:
+        logger.info("Starting merge/repair pass...")
         merge_template = args.merge_template.read_text(encoding="utf-8")
         merge_dir = out_dir / f"merge_{args.target_lang}"
         merge_dir.mkdir(parents=True, exist_ok=True)
 
         merge_chunks = chunk_entries(entries, args.merge_chunk_seconds, args.merge_overlap_seconds)
+        logger.info(f"Merge chunking: {len(merge_chunks)} chunks ({args.merge_chunk_seconds}s each, {args.merge_overlap_seconds}s overlap)")
         merge_specs: list[tuple[float, float, list[SrtEntry], list[SrtEntry], Path]] = []
 
         for idx, chunk in enumerate(merge_chunks, start=1):
@@ -322,10 +359,22 @@ def main() -> None:
 
         if not args.merge_prompts_only:
             if args.dry_run:
+                logger.info("Dry run: using candidate/source as merge output")
                 for _start, _end, source_entries, candidate_entries, output_path in merge_specs:
                     fallback = candidate_entries or source_entries
                     write_srt(fallback, output_path)
             else:
+                # Count how many merge chunks need processing
+                merge_chunks_to_process = sum(
+                    1 for output_path in merge_output_paths
+                    if not (output_path.exists() and output_path.stat().st_size > 0)
+                )
+                if merge_chunks_to_process < len(merge_output_paths):
+                    logger.info(f"Skipping {len(merge_output_paths) - merge_chunks_to_process} already merged chunks")
+                logger.info(f"Processing {merge_chunks_to_process} merge chunks with {args.merge_workers} workers...")
+
+                merge_start = time.time()
+                merge_completed = 0
                 with concurrent.futures.ThreadPoolExecutor(max_workers=args.merge_workers) as executor:
                     futures = []
                     for prompt_path, output_path in zip(merge_prompt_paths, merge_output_paths):
@@ -336,6 +385,10 @@ def main() -> None:
                         )
                     for fut in concurrent.futures.as_completed(futures):
                         fut.result()
+                        merge_completed += 1
+                        logger.info(f"Merge progress: {merge_completed}/{merge_chunks_to_process} chunks")
+                merge_elapsed = time.time() - merge_start
+                logger.info(f"Merge pass completed in {merge_elapsed:.1f}s ({merge_elapsed/60:.1f} min)")
 
         if not args.merge_prompts_only:
             repaired_chunks: list[tuple[float, float, list[SrtEntry]]] = []
@@ -352,8 +405,11 @@ def main() -> None:
             merged = _merge_chunks(repaired_chunks, args.merge_overlap_seconds)
 
     write_srt(merged, args.output)
+    logger.info(f"Output written: {args.output} ({len(merged)} entries)")
     if args.write_vtt:
-        write_vtt(merged, args.output.with_suffix(".vtt"))
+        vtt_path = args.output.with_suffix(".vtt")
+        write_vtt(merged, vtt_path)
+        logger.info(f"VTT written: {vtt_path}")
 
     keep_artifacts = args.keep_chunks or args.merge_prompts_only
     if not keep_artifacts:

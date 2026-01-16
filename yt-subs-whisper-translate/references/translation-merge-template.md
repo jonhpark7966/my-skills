@@ -17,6 +17,9 @@ Rules:
 - One text line per cue. No line breaks inside a cue.
 - Do not summarize, shorten, or omit content.
 - Use the candidate translation when it is correct, but fix missing or broken lines.
+- Ensure cues break at natural semantic boundaries (phrases, clauses).
+- For Korean output: use formal polite style (존댓말/합쇼체). End
+  sentences with -습니다/-ㅂ니다, -입니다, etc. Avoid casual endings.
 
 Source SRT:
 <<<

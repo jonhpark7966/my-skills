@@ -22,6 +22,10 @@ Rules:
 - Do not summarize, shorten, or omit content.
 - Preserve names and terminology. Use the video context to handle
   proper nouns.
+- Break cues at natural semantic boundaries (phrases, clauses).
+  Avoid splitting in the middle of a noun phrase or verb phrase.
+- For Korean output: use formal polite style (존댓말/합쇼체). End
+  sentences with -습니다/-ㅂ니다, -입니다, etc. Avoid casual endings.
 
 Input SRT:
 <<<

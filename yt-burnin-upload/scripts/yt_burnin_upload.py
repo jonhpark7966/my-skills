@@ -111,27 +111,29 @@ def _get_video_height(video_path: Path) -> int:
 
 
 def _get_font_size_for_resolution(height: int) -> int:
-    """Return appropriate font size based on video height."""
-    if height <= 720:
-        return 12
-    elif height <= 1080:
-        return 15
-    elif height <= 1440:
-        return 20
-    else:  # 4K and above
-        return 27
+    """Return appropriate font size based on video height.
+
+    Target: FHD (1080p) = 15pt, scale proportionally for other resolutions.
+    """
+    # Base: 15pt at 1080p
+    base_size = 15
+    base_height = 1080
+    # Scale linearly with resolution
+    scaled = int(round(base_size * height / base_height))
+    # Clamp to reasonable range
+    return max(10, min(scaled, 36))
 
 
 def _get_margin_for_resolution(height: int) -> int:
-    """Return appropriate margin based on video height."""
-    if height <= 720:
-        return 35
-    elif height <= 1080:
-        return 50
-    elif height <= 1440:
-        return 65
-    else:  # 4K and above
-        return 90
+    """Return appropriate bottom margin based on video height.
+
+    Target: FHD (1080p) = 40px from bottom, scale proportionally.
+    """
+    # Base: 40px at 1080p
+    base_margin = 40
+    base_height = 1080
+    scaled = int(round(base_margin * height / base_height))
+    return max(20, min(scaled, 100))
 
 
 def _burn_in(
@@ -146,15 +148,25 @@ def _burn_in(
     font_size = _get_font_size_for_resolution(height)
     margin_v = _get_margin_for_resolution(height)
 
+    print(f"Burn-in settings: height={height}px, font_size={font_size}pt, margin_v={margin_v}px", file=sys.stderr)
+
     filters = []
     ko_path = _escape_sub_path(ko_srt)
-    filters.append(
-        "subtitles='{path}':force_style='FontName=Noto Sans,FontSize={font_size},Outline=2,Shadow=1,Alignment=2,MarginV={margin_v}'".format(
-            path=ko_path,
-            font_size=font_size,
-            margin_v=margin_v,
-        )
+    # ASS style: Alignment=2 is bottom-center, WrapStyle=2 disables smart wrapping
+    # BorderStyle=1 is outline + shadow
+    force_style = (
+        f"FontName=Noto Sans CJK KR,"
+        f"FontSize={font_size},"
+        f"PrimaryColour=&HFFFFFF,"
+        f"OutlineColour=&H000000,"
+        f"Outline=2,"
+        f"Shadow=1,"
+        f"BorderStyle=1,"
+        f"Alignment=2,"
+        f"MarginV={margin_v},"
+        f"WrapStyle=2"
     )
+    filters.append(f"subtitles='{ko_path}':force_style='{force_style}'")
     vf = ",".join(filters)
 
     cmd = [
@@ -173,7 +185,7 @@ def _burn_in(
         error_msg = (
             f"ffmpeg burn-in failed.\n"
             f"Possible causes:\n"
-            f"  - Font 'Noto Sans' not installed (install via: brew install font-noto-sans)\n"
+            f"  - Font 'Noto Sans CJK KR' not installed (install via: sudo apt install fonts-noto-cjk)\n"
             f"  - Invalid SRT file format (check {ko_srt})\n"
             f"  - Insufficient disk space\n"
             f"  - Video codec not supported\n"

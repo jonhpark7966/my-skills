@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 from srt_utils import normalize_entries, parse_srt, write_srt, write_vtt
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
 
 def _require_exe(name: str) -> str:
@@ -49,26 +59,125 @@ def _yt_dlp_meta(url: str, output_path: Path) -> dict:
     return json.loads(out)
 
 
-def _select_manual_langs(subtitles: dict) -> tuple[str | None, list[str], list[str]]:
-    langs = set(subtitles.keys())
-    en_langs = sorted([lang for lang in langs if lang == "en" or lang.startswith("en-")])
-    ko_langs = sorted([lang for lang in langs if lang == "ko" or lang.startswith("ko-")])
-    zh_langs = sorted([lang for lang in langs if lang.startswith("zh")])
+def _download_audio(url: str, out_dir: Path, video_id: str) -> Path:
+    """Download audio for Whisper processing."""
+    _require_exe("yt-dlp")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    template = str(out_dir / f"{video_id}.%(ext)s")
+    cmd = [
+        "yt-dlp",
+        "--no-playlist",
+        "-x",
+        "--audio-format",
+        "mp3",
+        "-o",
+        template,
+        url,
+    ]
+    logger.info("Downloading audio...")
+    start = time.time()
+    _run(cmd)
+    elapsed = time.time() - start
+    audio_path = out_dir / f"{video_id}.mp3"
+    if not audio_path.exists():
+        raise RuntimeError(f"Audio download finished but {audio_path} not found")
+    logger.info(f"Audio downloaded in {elapsed:.1f}s: {audio_path}")
+    return audio_path
 
-    if zh_langs:
-        preferred = "zh-Hans" if "zh-Hans" in zh_langs else "zh-Hant" if "zh-Hant" in zh_langs else zh_langs[0]
-        return "zh", [preferred], ["en", "ko"]
-    if en_langs and ko_langs:
-        en_pref = "en" if "en" in en_langs else en_langs[0]
-        ko_pref = "ko" if "ko" in ko_langs else ko_langs[0]
-        return None, [en_pref, ko_pref], []
-    if en_langs:
-        en_pref = "en" if "en" in en_langs else en_langs[0]
-        return "en", [en_pref], ["ko"]
-    if ko_langs:
-        ko_pref = "ko" if "ko" in ko_langs else ko_langs[0]
-        return "ko", [ko_pref], []
-    return None, [], []
+
+def _detect_audio_language(audio_path: Path) -> str:
+    """Detect audio language using Whisper."""
+    _require_exe("whisper")
+    logger.info("Detecting audio language with Whisper...")
+    start = time.time()
+
+    # Use whisper with --task detect_language (short sample)
+    cmd = [
+        "whisper",
+        str(audio_path),
+        "--model", "turbo",
+        "--task", "detect_language",
+        "--output_format", "txt",
+        "--output_dir", str(audio_path.parent),
+    ]
+    try:
+        out = _run(cmd, capture=True)
+        elapsed = time.time() - start
+
+        # Parse detected language from output
+        # Whisper outputs: "Detected language: English"
+        for line in out.splitlines():
+            if "detected language" in line.lower():
+                lang = line.split(":")[-1].strip().lower()
+                lang_code = _language_to_code(lang)
+                logger.info(f"Detected audio language: {lang} ({lang_code}) in {elapsed:.1f}s")
+                return lang_code
+    except Exception as e:
+        logger.warning(f"Language detection failed: {e}")
+
+    # Fallback: transcribe short segment and detect from text
+    logger.info("Fallback: detecting language from transcription...")
+    return "en"  # Default to English
+
+
+def _language_to_code(lang_name: str) -> str:
+    """Convert language name to code."""
+    mapping = {
+        "english": "en",
+        "korean": "ko",
+        "chinese": "zh",
+        "mandarin": "zh",
+        "japanese": "ja",
+        "spanish": "es",
+        "french": "fr",
+        "german": "de",
+    }
+    return mapping.get(lang_name.lower(), "en")
+
+
+def _select_manual_subs_for_audio_lang(subtitles: dict, audio_lang: str) -> tuple[str | None, list[str], list[str]]:
+    """
+    Select manual subtitles based on audio language.
+    Priority: audio language matching subtitle > other manual subs > whisper fallback
+    """
+    langs = set(subtitles.keys())
+
+    # Find subtitles matching audio language
+    audio_lang_subs = sorted([lang for lang in langs if lang == audio_lang or lang.startswith(f"{audio_lang}-")])
+    ko_langs = sorted([lang for lang in langs if lang == "ko" or lang.startswith("ko-")])
+
+    if audio_lang == "en":
+        if audio_lang_subs:
+            # English audio + English subs available
+            en_pref = "en" if "en" in audio_lang_subs else audio_lang_subs[0]
+            if ko_langs:
+                ko_pref = "ko" if "ko" in ko_langs else ko_langs[0]
+                return None, [en_pref, ko_pref], []  # Both available, no translation needed
+            return "en", [en_pref], ["ko"]  # Need to translate to Korean
+        else:
+            # English audio but no English subs -> use Whisper
+            return None, [], []
+
+    elif audio_lang == "zh":
+        if audio_lang_subs:
+            # Chinese audio + Chinese subs
+            zh_pref = "zh-Hans" if "zh-Hans" in audio_lang_subs else "zh-Hant" if "zh-Hant" in audio_lang_subs else audio_lang_subs[0]
+            return "zh", [zh_pref], ["en", "ko"]
+        else:
+            return None, [], []
+
+    elif audio_lang == "ko":
+        if ko_langs:
+            ko_pref = "ko" if "ko" in ko_langs else ko_langs[0]
+            return "ko", [ko_pref], []  # Korean audio + Korean subs, no translation
+        else:
+            return None, [], []
+
+    else:
+        # Other languages - check if matching subs exist
+        if audio_lang_subs:
+            return audio_lang, [audio_lang_subs[0]], ["en", "ko"]
+        return None, [], []
 
 
 def _download_manual_subs(url: str, out_dir: Path, video_id: str, langs: list[str]) -> list[Path]:
@@ -89,35 +198,18 @@ def _download_manual_subs(url: str, out_dir: Path, video_id: str, langs: list[st
         str(out_dir / f"{video_id}.%(ext)s"),
         url,
     ]
+    logger.info(f"Downloading manual subtitles: {langs}")
+    start = time.time()
     _run(cmd)
+    elapsed = time.time() - start
 
     downloaded: list[Path] = []
     for lang in langs:
         matches = sorted(out_dir.glob(f"{video_id}.{lang}*.srt"))
         if matches:
             downloaded.append(matches[0])
+    logger.info(f"Downloaded {len(downloaded)} subtitle files in {elapsed:.1f}s")
     return downloaded
-
-
-def _download_audio(url: str, out_dir: Path, video_id: str) -> Path:
-    _require_exe("yt-dlp")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    template = str(out_dir / f"{video_id}.%(ext)s")
-    cmd = [
-        "yt-dlp",
-        "--no-playlist",
-        "-x",
-        "--audio-format",
-        "mp3",
-        "-o",
-        template,
-        url,
-    ]
-    _run(cmd)
-    audio_path = out_dir / f"{video_id}.mp3"
-    if not audio_path.exists():
-        raise RuntimeError(f"Audio download finished but {audio_path} not found")
-    return audio_path
 
 
 def _whisper_transcribe(
@@ -133,7 +225,9 @@ def _whisper_transcribe(
     out_dir.mkdir(parents=True, exist_ok=True)
     srt_path = out_dir / f"{audio_path.stem}.srt"
     if srt_path.exists():
+        logger.info(f"Using existing Whisper output: {srt_path}")
         return srt_path
+
     cmd = [
         "whisper",
         str(audio_path),
@@ -152,13 +246,21 @@ def _whisper_transcribe(
             cmd.extend(["--max_words_per_line", str(max_words_per_line)])
         if max_line_count:
             cmd.extend(["--max_line_count", str(max_line_count)])
+
+    logger.info(f"Running Whisper transcription (model={model}, language={language})...")
+    start = time.time()
     _run(cmd)
+    elapsed = time.time() - start
+
     if not srt_path.exists():
         raise RuntimeError(f"Whisper finished but SRT not found: {srt_path}")
+
+    logger.info(f"Whisper transcription completed in {elapsed:.1f}s")
     return srt_path
 
 
-def _detect_language(entries: list) -> str:
+def _detect_language_from_text(entries: list) -> str:
+    """Detect language from subtitle text content."""
     counts = {"ko": 0, "zh": 0, "en": 0}
     for entry in entries:
         for ch in entry.text:
@@ -206,6 +308,11 @@ def _run_translate(
     min_duration: float,
     dry_run: bool,
 ) -> None:
+    logger.info(f"Translating {source_lang} -> {target_lang}")
+    logger.info(f"  Chunk: {chunk_seconds}s, overlap: {overlap_seconds}s, workers: {max_workers}")
+    logger.info(f"  Chunk model: {chunk_model}, reasoning: {chunk_reasoning}")
+    logger.info(f"  Merge model: {merge_model}, reasoning: {merge_reasoning}")
+
     cmd = [
         sys.executable,
         str(script_path),
@@ -251,7 +358,11 @@ def _run_translate(
         cmd.append("--no-merge-pass")
     if dry_run:
         cmd.append("--dry-run")
+
+    start = time.time()
     subprocess.run(cmd, check=True)
+    elapsed = time.time() - start
+    logger.info(f"Translation {source_lang} -> {target_lang} completed in {elapsed:.1f}s")
 
 
 def main() -> None:
@@ -296,6 +407,8 @@ def main() -> None:
     parser.add_argument("--dry-run", action="store_true", help="Skip Codex calls; echo input")
     args = parser.parse_args()
 
+    total_start = time.time()
+
     if not args.url and not args.source_srt:
         parser.error("Provide a URL or --source-srt")
 
@@ -320,6 +433,10 @@ def main() -> None:
         out_dir = args.out_dir or Path("yt_subs") / video_id
         out_dir.mkdir(parents=True, exist_ok=True)
         meta_path = meta_path or (out_dir / "meta.json")
+
+        logger.info(f"Processing video: {video_id}")
+        logger.info(f"Output directory: {out_dir}")
+
         meta = _yt_dlp_meta(args.url, meta_path)
 
     if meta_path and meta_path.exists() and not meta:
@@ -327,8 +444,9 @@ def main() -> None:
 
     translate_script = Path(__file__).resolve().parent / "translate_srt_codex.py"
 
+    # Handle --source-srt case
     if args.source_srt:
-        source_lang = args.source_lang or _detect_language(parse_srt(source_srt))
+        source_lang = args.source_lang or _detect_language_from_text(parse_srt(source_srt))
         source_srt_path = out_dir / f"{source_lang}.srt"
         source_srt_path.write_text(source_srt.read_text(encoding="utf-8"), encoding="utf-8")
         _normalize_file(source_srt_path, args.max_chars, args.min_duration)
@@ -366,47 +484,73 @@ def main() -> None:
             )
         return
 
+    # Step 1: Detect audio language
+    logger.info("=" * 50)
+    logger.info("Step 1: Detecting audio language...")
+    audio_path = _download_audio(args.url, out_dir, video_id)
+
+    if args.whisper_language:
+        audio_lang = args.whisper_language
+        logger.info(f"Using specified language: {audio_lang}")
+    else:
+        audio_lang = _detect_audio_language(audio_path)
+
+    # Step 2: Check for matching manual subtitles
+    logger.info("=" * 50)
+    logger.info("Step 2: Checking manual subtitles...")
     subtitles = meta.get("subtitles", {})
-    source_lang, manual_langs, targets = _select_manual_langs(subtitles)
+    available_langs = list(subtitles.keys())
+    logger.info(f"Audio language: {audio_lang}")
+    logger.info(f"Available manual subtitles: {available_langs}")
+
+    source_lang, manual_langs, targets = _select_manual_subs_for_audio_lang(subtitles, audio_lang)
 
     downloaded_subs: list[Path] = []
+    use_whisper = False
+
     if manual_langs:
+        logger.info(f"Using manual subtitles: {manual_langs}")
         downloaded_subs = _download_manual_subs(args.url, out_dir, video_id, manual_langs)
 
-    if downloaded_subs:
-        for lang in manual_langs:
-            matches = sorted(out_dir.glob(f"{video_id}.{lang}*.srt"))
-            if not matches:
-                continue
-            short_lang = "zh" if lang.startswith("zh") else lang.split("-")[0]
-            target_path = out_dir / f"{short_lang}.srt"
-            target_path.write_text(matches[0].read_text(encoding="utf-8"), encoding="utf-8")
-            _normalize_file(target_path, args.max_chars, args.min_duration)
+        if downloaded_subs:
+            for lang in manual_langs:
+                matches = sorted(out_dir.glob(f"{video_id}.{lang}*.srt"))
+                if not matches:
+                    continue
+                short_lang = "zh" if lang.startswith("zh") else lang.split("-")[0]
+                target_path = out_dir / f"{short_lang}.srt"
+                target_path.write_text(matches[0].read_text(encoding="utf-8"), encoding="utf-8")
+                _normalize_file(target_path, args.max_chars, args.min_duration)
     else:
+        logger.info(f"No matching manual subtitles for audio language '{audio_lang}'. Using Whisper.")
+        use_whisper = True
+
+    # Step 3: Whisper transcription if needed
+    if use_whisper or not downloaded_subs:
+        logger.info("=" * 50)
+        logger.info("Step 3: Whisper transcription...")
         source_srt_path = out_dir / "source.srt"
+
         if not source_srt_path.exists():
             candidate_whisper = out_dir / f"{video_id}.srt"
             if candidate_whisper.exists():
                 source_srt_path.write_text(candidate_whisper.read_text(encoding="utf-8"), encoding="utf-8")
             else:
-                audio_path = _download_audio(args.url, out_dir, video_id)
                 whisper_srt = _whisper_transcribe(
                     audio_path,
                     out_dir,
                     args.model,
-                    args.whisper_language,
+                    audio_lang,  # Use detected audio language
                     args.whisper_word_timestamps,
                     args.whisper_max_words,
                     args.whisper_max_line_count,
                 )
                 source_srt_path.write_text(whisper_srt.read_text(encoding="utf-8"), encoding="utf-8")
+
         _normalize_file(source_srt_path, args.max_chars, args.min_duration)
-        if args.source_lang:
-            source_lang = args.source_lang
-        elif args.whisper_language:
-            source_lang = args.whisper_language
-        else:
-            source_lang = _detect_language(parse_srt(source_srt_path))
+        source_lang = audio_lang
+
+        # Copy to language-specific file
         lang_srt_path = out_dir / f"{source_lang}.srt"
         if not lang_srt_path.exists():
             shutil.copyfile(source_srt_path, lang_srt_path)
@@ -414,60 +558,61 @@ def main() -> None:
             lang_vtt_path = out_dir / f"{source_lang}.vtt"
             if source_vtt_path.exists() and not lang_vtt_path.exists():
                 shutil.copyfile(source_vtt_path, lang_vtt_path)
+
+        # Set translation targets
         if source_lang == "ko":
             targets = []
         elif source_lang == "zh":
             targets = ["en", "ko"]
         else:
             targets = ["ko"]
-        manual_langs = []
+
         downloaded_subs = [source_srt_path]
 
     if not downloaded_subs:
         raise RuntimeError("No subtitles available and Whisper did not produce output")
 
-    if source_lang is None and not targets:
-        return
+    # Step 4: Translation
+    if targets:
+        logger.info("=" * 50)
+        logger.info(f"Step 4: Translation ({source_lang} -> {targets})...")
 
-    if source_lang is None and manual_langs:
-        if "en" in manual_langs and "ko" in manual_langs:
-            return
-        if "en" in manual_langs:
-            source_lang = "en"
-        elif "ko" in manual_langs:
-            source_lang = "ko"
-        elif any(lang.startswith("zh") for lang in manual_langs):
-            source_lang = "zh"
+        source_srt_path = out_dir / f"{source_lang}.srt"
+        if not source_srt_path.exists():
+            raise RuntimeError(f"Source SRT not found: {source_srt_path}")
 
-    source_srt_path = out_dir / f"{source_lang}.srt" if source_lang else None
-    if source_srt_path and not source_srt_path.exists():
-        raise RuntimeError(f"Source SRT not found: {source_srt_path}")
+        for target in targets:
+            output_srt = out_dir / f"{target}.srt"
+            _run_translate(
+                translate_script,
+                source_srt_path,
+                output_srt,
+                meta_path,
+                source_lang,
+                target,
+                args.extra_context,
+                args.chunk_seconds,
+                args.overlap_seconds,
+                args.max_workers,
+                args.chunk_model,
+                args.chunk_reasoning,
+                args.merge_model,
+                args.merge_reasoning,
+                args.merge_chunk_seconds,
+                args.merge_overlap_seconds,
+                args.merge_workers,
+                args.merge_pass,
+                args.max_chars,
+                args.min_duration,
+                args.dry_run,
+            )
+    else:
+        logger.info("No translation needed.")
 
-    for target in targets:
-        output_srt = out_dir / f"{target}.srt"
-        _run_translate(
-            translate_script,
-            source_srt_path,
-            output_srt,
-            meta_path,
-            source_lang,
-            target,
-            args.extra_context,
-            args.chunk_seconds,
-            args.overlap_seconds,
-            args.max_workers,
-            args.chunk_model,
-            args.chunk_reasoning,
-            args.merge_model,
-            args.merge_reasoning,
-            args.merge_chunk_seconds,
-            args.merge_overlap_seconds,
-            args.merge_workers,
-            args.merge_pass,
-            args.max_chars,
-            args.min_duration,
-            args.dry_run,
-        )
+    total_elapsed = time.time() - total_start
+    logger.info("=" * 50)
+    logger.info(f"Total processing time: {total_elapsed:.1f}s")
+    logger.info("=" * 50)
 
 
 if __name__ == "__main__":
