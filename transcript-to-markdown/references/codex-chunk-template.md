@@ -12,8 +12,8 @@ Rules:
 - Output Markdown only.
 - Use the same language as the transcript.
 - Every bullet point MUST include a timestamp tag: `[MM:SS]` or `[HH:MM:SS]`.
-- For key statements or memorable quotes from speakers, use blockquote format:
-  > "[MM:SS] Exact quote here" — Speaker Name (if known)
+- For key statements or memorable quotes, use blockquote format:
+  > "[MM:SS] Exact quote here"
 - Keep notes detailed; do not summarize or omit important facts.
 - Use sub-bullets for supporting details.
 - If a chapter title is provided, use it as the section heading.

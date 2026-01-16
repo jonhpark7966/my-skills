@@ -18,7 +18,7 @@ Rules:
 - Under each chapter, use bullet points with timestamp tags:
   `- [MM:SS] <Detailed note>`
 - Preserve all blockquotes (key statements) from the chunks:
-  > "[MM:SS] Quote" — Speaker
+  > "[MM:SS] Quote"
 - Remove duplicate content from overlapping regions.
 - Maintain chronological order by timestamps.
 - Do not omit important information; keep notes detailed.
