@@ -434,7 +434,7 @@ def main() -> None:
     parser.add_argument("--merge-reasoning", default="high", help="Reasoning effort for merge/repair")
     parser.add_argument("--merge-chunk-seconds", type=float, default=300.0, help="Merge chunk size in seconds")
     parser.add_argument("--merge-overlap-seconds", type=float, default=60.0, help="Merge overlap in seconds")
-    parser.add_argument("--merge-workers", type=int, default=4, help="Parallel workers for merge/repair")
+    parser.add_argument("--merge-workers", type=int, default=20, help="Parallel workers for merge/repair")
     parser.add_argument("--merge-pass", dest="merge_pass", action="store_true", default=True, help="Enable merge/repair")
     parser.add_argument("--no-merge-pass", dest="merge_pass", action="store_false", help="Disable merge/repair")
     parser.add_argument("--max-chars", type=int, default=42, help="Max characters per cue")
