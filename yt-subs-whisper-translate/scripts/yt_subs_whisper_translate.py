@@ -88,20 +88,35 @@ def _download_audio(url: str, out_dir: Path, video_id: str) -> Path:
 def _detect_audio_language(audio_path: Path) -> str:
     """Detect audio language using Whisper.
 
-    Runs Whisper without --language flag to trigger auto-detection.
+    Extracts first 30 seconds of audio and runs Whisper for fast detection.
     Whisper prints 'Detected language: X' to stderr.
     """
     _require_exe("whisper")
+    _require_exe("ffmpeg")
     logger.info("Detecting audio language with Whisper...")
     start = time.time()
 
-    # Run whisper without --language to trigger auto-detection
-    # Use tiny model for fast detection, output to temp dir
     import tempfile
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Extract first 30 seconds for fast language detection
+        sample_path = Path(tmpdir) / "sample.mp3"
+        extract_cmd = [
+            "ffmpeg", "-y",
+            "-i", str(audio_path),
+            "-t", "30",  # First 30 seconds only
+            "-acodec", "copy",
+            str(sample_path),
+        ]
+        try:
+            subprocess.run(extract_cmd, capture_output=True, check=True, timeout=30)
+        except Exception as e:
+            logger.warning(f"Failed to extract audio sample: {e}")
+            sample_path = audio_path  # Fallback to full audio
+
+        # Run whisper without --language to trigger auto-detection
         cmd = [
             "whisper",
-            str(audio_path),
+            str(sample_path),
             "--model", "tiny",  # Fast model for detection
             "--output_format", "txt",
             "--output_dir", tmpdir,
@@ -111,7 +126,7 @@ def _detect_audio_language(audio_path: Path) -> str:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=120,  # 2 min timeout
+                timeout=60,  # 1 min timeout (30s audio should be fast)
             )
             elapsed = time.time() - start
 
