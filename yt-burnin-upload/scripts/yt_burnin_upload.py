@@ -127,13 +127,13 @@ def _get_font_size_for_resolution(height: int) -> int:
 def _get_margin_for_resolution(height: int) -> int:
     """Return appropriate bottom margin based on video height.
 
-    Target: FHD (1080p) = 40px from bottom, scale proportionally.
+    Target: FHD (1080p) = 20px from bottom, scale proportionally.
     """
-    # Base: 40px at 1080p
-    base_margin = 40
+    # Base: 20px at 1080p (closer to bottom edge)
+    base_margin = 20
     base_height = 1080
     scaled = int(round(base_margin * height / base_height))
-    return max(20, min(scaled, 100))
+    return max(10, min(scaled, 50))
 
 
 def _burn_in(
