@@ -12,7 +12,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from srt_utils import SrtEntry, chunk_entries, format_srt, normalize_entries, parse_srt, write_srt, write_vtt
+from srt_utils import SrtEntry, chunk_entries, format_srt, parse_srt, write_srt, write_vtt
 
 # Setup logging
 logging.basicConfig(
@@ -150,38 +150,6 @@ def _filter_entries(entries: list[SrtEntry], start_s: float, end_s: float) -> li
     return [entry for entry in entries if entry.end_s > start_s and entry.start_s < end_s]
 
 
-def _overlap_ratio(a: tuple[float, float], b: tuple[float, float]) -> float:
-    a0, a1 = a
-    b0, b1 = b
-    inter = max(0.0, min(a1, b1) - max(a0, b0))
-    union = max(a1, b1) - min(a0, b0)
-    if union <= 0:
-        return 0.0
-    return inter / union
-
-
-def _align_entries_to_source(source: list[SrtEntry], translated: list[SrtEntry]) -> list[SrtEntry]:
-    if not source:
-        return []
-    if len(translated) == len(source):
-        return [
-            SrtEntry(start_s=src.start_s, end_s=src.end_s, text=tr.text)
-            for src, tr in zip(source, translated)
-        ]
-
-    aligned: list[SrtEntry] = []
-    for src in source:
-        best_text = src.text
-        best_overlap = 0.0
-        for tr in translated:
-            overlap = _overlap_ratio((src.start_s, src.end_s), (tr.start_s, tr.end_s))
-            if overlap > best_overlap and tr.text.strip():
-                best_overlap = overlap
-                best_text = tr.text
-        aligned.append(SrtEntry(start_s=src.start_s, end_s=src.end_s, text=best_text))
-    return aligned
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Translate SRT with Codex CLI in parallel chunks.")
     parser.add_argument("--input", required=True, type=Path, help="Input SRT file")
@@ -238,7 +206,7 @@ def main() -> None:
         extra_context = args.extra_context.read_text(encoding="utf-8", errors="replace").strip()
 
     entries = parse_srt(args.input)
-    entries = normalize_entries(entries, max_chars=args.max_chars, min_duration_s=args.min_duration)
+    # Note: normalize_entries removed - Whisper already segments well, normalization splits semantic units
     chunks = chunk_entries(entries, args.chunk_seconds, args.overlap_seconds)
     if not chunks:
         raise RuntimeError("No subtitle entries to translate")
@@ -398,9 +366,10 @@ def main() -> None:
                 translated_entries = _dedupe_entries_keep_last(translated_entries)
                 if not translated_entries:
                     translated_entries = candidate_entries
-                aligned = _align_entries_to_source(source_entries, translated_entries)
-                aligned = normalize_entries(aligned, max_chars=args.max_chars, min_duration_s=args.min_duration)
-                repaired_chunks.append((start_s, end_s, aligned))
+                # Note: _align_entries_to_source and normalize_entries removed
+                # - align caused English fallback when timestamps didn't match
+                # - normalize split semantic units unnecessarily
+                repaired_chunks.append((start_s, end_s, translated_entries))
 
             merged = _merge_chunks(repaired_chunks, args.merge_overlap_seconds)
 

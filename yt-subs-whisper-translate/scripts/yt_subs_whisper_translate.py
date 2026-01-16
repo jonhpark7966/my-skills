@@ -11,7 +11,7 @@ import sys
 import time
 from pathlib import Path
 
-from srt_utils import normalize_entries, parse_srt, write_srt, write_vtt
+from srt_utils import parse_srt, write_srt, write_vtt
 
 # Setup logging
 logging.basicConfig(
@@ -314,11 +314,10 @@ def _detect_language_from_text(entries: list) -> str:
     return "en"
 
 
-def _normalize_file(path: Path, max_chars: int, min_duration: float) -> None:
-    entries = parse_srt(path)
-    normalized = normalize_entries(entries, max_chars=max_chars, min_duration_s=min_duration)
-    write_srt(normalized, path)
-    write_vtt(normalized, path.with_suffix(".vtt"))
+def _write_vtt_from_srt(srt_path: Path) -> None:
+    """Write VTT file from existing SRT (no normalization - Whisper segments are good)."""
+    entries = parse_srt(srt_path)
+    write_vtt(entries, srt_path.with_suffix(".vtt"))
 
 
 def _run_translate(
@@ -485,7 +484,7 @@ def main() -> None:
         source_lang = args.source_lang or _detect_language_from_text(parse_srt(source_srt))
         source_srt_path = out_dir / f"{source_lang}.srt"
         source_srt_path.write_text(source_srt.read_text(encoding="utf-8"), encoding="utf-8")
-        _normalize_file(source_srt_path, args.max_chars, args.min_duration)
+        _write_vtt_from_srt(source_srt_path)
 
         targets = []
         if source_lang == "en":
@@ -556,7 +555,7 @@ def main() -> None:
                 short_lang = "zh" if lang.startswith("zh") else lang.split("-")[0]
                 target_path = out_dir / f"{short_lang}.srt"
                 target_path.write_text(matches[0].read_text(encoding="utf-8"), encoding="utf-8")
-                _normalize_file(target_path, args.max_chars, args.min_duration)
+                _write_vtt_from_srt(target_path)
     else:
         logger.info(f"No matching manual subtitles for audio language '{audio_lang}'. Using Whisper.")
         use_whisper = True
@@ -583,7 +582,7 @@ def main() -> None:
                 )
                 source_srt_path.write_text(whisper_srt.read_text(encoding="utf-8"), encoding="utf-8")
 
-        _normalize_file(source_srt_path, args.max_chars, args.min_duration)
+        _write_vtt_from_srt(source_srt_path)
         source_lang = audio_lang
 
         # Copy to language-specific file
