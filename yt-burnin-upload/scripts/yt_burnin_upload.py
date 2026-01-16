@@ -260,11 +260,13 @@ def _upload_video(
     token_path: Path,
     privacy_status: str,
     dry_run: bool,
-) -> None:
+) -> dict | None:
+    """Upload video to YouTube and return upload info."""
     if dry_run:
-        return
+        return None
 
     try:
+        from google.oauth2.credentials import Credentials
         from google_auth_oauthlib.flow import InstalledAppFlow
         from googleapiclient.discovery import build
         from googleapiclient.http import MediaFileUpload
@@ -272,9 +274,20 @@ def _upload_video(
         raise RuntimeError("Missing google-api-python-client dependencies") from exc
 
     scopes = ["https://www.googleapis.com/auth/youtube.upload"]
-    flow = InstalledAppFlow.from_client_secrets_file(str(client_secret), scopes)
-    creds = flow.run_local_server(port=0)
-    token_path.write_text(creds.to_json(), encoding="utf-8")
+
+    # Load existing token or run OAuth flow
+    creds = None
+    if token_path.exists():
+        creds = Credentials.from_authorized_user_file(str(token_path), scopes)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            from google.auth.transport.requests import Request
+            creds.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(str(client_secret), scopes)
+            creds = flow.run_local_server(port=0)
+        token_path.write_text(creds.to_json(), encoding="utf-8")
 
     youtube = build("youtube", "v3", credentials=creds)
     request_body = {
@@ -286,7 +299,15 @@ def _upload_video(
     }
     media = MediaFileUpload(str(video_path), chunksize=-1, resumable=True)
     request = youtube.videos().insert(part="snippet,status", body=request_body, media_body=media)
-    request.execute()
+    response = request.execute()
+
+    video_id = response.get("id")
+    return {
+        "video_id": video_id,
+        "url": f"https://www.youtube.com/watch?v={video_id}",
+        "title": title,
+        "privacy": privacy_status,
+    }
 
 
 def main() -> None:
@@ -368,7 +389,7 @@ def main() -> None:
     if args.upload:
         if not args.client_secret:
             raise RuntimeError("OAuth client secret path is required for upload")
-        _upload_video(
+        upload_info = _upload_video(
             burnin_path,
             ko_title,
             ko_description,
@@ -377,12 +398,21 @@ def main() -> None:
             args.privacy,
             args.dry_run,
         )
-    else:
-        metadata_out = out_dir / "metadata_ko.json"
-        metadata_out.write_text(
-            json.dumps({"title": ko_title, "description": ko_description}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        if upload_info:
+            # Save upload info for downstream tools
+            upload_info_path = out_dir / "upload_info.json"
+            upload_info_path.write_text(
+                json.dumps(upload_info, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            print(f"Uploaded: {upload_info['url']}", file=sys.stderr)
+
+    # Always save translated metadata
+    metadata_out = out_dir / "metadata_ko.json"
+    metadata_out.write_text(
+        json.dumps({"title": ko_title, "description": ko_description}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":
