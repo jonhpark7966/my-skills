@@ -113,10 +113,10 @@ def _get_video_height(video_path: Path) -> int:
 def _get_font_size_for_resolution(height: int) -> int:
     """Return appropriate font size based on video height.
 
-    Target: FHD (1080p) = 15pt, scale proportionally for other resolutions.
+    Target: FHD (1080p) = 12pt, scale proportionally for other resolutions.
     """
-    # Base: 15pt at 1080p
-    base_size = 15
+    # Base: 12pt at 1080p
+    base_size = 12
     base_height = 1080
     # Scale linearly with resolution
     scaled = int(round(base_size * height / base_height))
