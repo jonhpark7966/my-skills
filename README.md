@@ -101,3 +101,36 @@ python yt-dlp-whisper-shorts/scripts/yt_to_shorts.py "<YOUTUBE_URL>" \
 
 - Providing a YouTube URL and asking for Shorts highlights
 - Asking to transcribe and analyze a video for clips
+
+---
+
+### notes-to-archive
+
+Convert verbose transcript notes from `transcript-to-markdown` into curated web archive entries for sudoremove.com.
+
+- **Input**: Video folder with `notes.md`, `upload_info.json`, `meta.json`
+- **Output**: Curated archive markdown + GitHub PR
+- **Features**: Content curation, tag generation, git operations
+
+#### What it does
+
+1. Reads verbose notes.md (from transcript-to-markdown)
+2. **Curates content** - selects ~30-50% of important points (not verbatim copy)
+3. **Generates meaningful tags** - based on content (e.g., "Physical AI", "Robotics")
+4. Creates archive markdown with proper schema
+5. Git branch, commit, push, and create PR
+
+#### Usage
+
+This skill is designed to be called by Claude CLI:
+
+```bash
+claude -p "Use the notes-to-archive skill to process video folder /path/to/video and add to web archive"
+```
+
+Or invoked automatically by `youtube-storage/scripts/process_video.py` (step 4).
+
+#### Triggers
+
+- Asking to add processed video to web archive
+- Asking to create curated archive entry from notes
