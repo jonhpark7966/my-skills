@@ -40,10 +40,18 @@ This is the key step. Do NOT copy notes.md verbatim. Instead:
 - Prioritize: key insights, main arguments, memorable quotes
 - Remove: repetitive points, minor details, transitional statements
 
+### CRITICAL: Preserve timestamps
+**Every bullet point MUST start with `[MM:SS]` timestamp.** This is essential for video navigation.
+
+- ✅ CORRECT: `- [00:49] 카롤·토비와 함께 로보틱스를 위한 파운데이션 모델...`
+- ❌ WRONG: `- 카롤·토비와 함께 로보틱스를 위한 파운데이션 모델...`
+- ❌ WRONG: `- **아이디어**: AI 주제의 일간 뉴스레터...` (no timestamp)
+
+Do NOT summarize multiple timestamps into one bullet. Each bullet = one timestamp from original notes.
+
 ### Improve formatting
-- Clean up bullet text for readability
-- Ensure consistent timestamp format `[MM:SS]`
-- Keep blockquotes for truly important quotes only
+- Clean up bullet text for readability (but keep the `[MM:SS]` prefix!)
+- Keep blockquotes for truly important quotes only (with timestamps)
 
 ### Chapter handling
 - Keep all chapters from notes.md
