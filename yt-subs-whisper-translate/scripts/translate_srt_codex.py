@@ -103,6 +103,37 @@ def _run_codex(
         )
 
 
+def _run_claude(prompt_path: Path) -> str:
+    """Run Claude Code CLI for validation pass. Returns stdout."""
+    _require_exe("claude")
+    cmd = [
+        "claude",
+        "-p", str(prompt_path),
+        "--allowedTools", "Edit,Write,Read",
+    ]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError(f"Claude CLI failed for {prompt_path}:\n{proc.stdout}")
+    return proc.stdout
+
+
+def _render_validation_prompt(
+    template: str,
+    source_lang: str,
+    target_lang: str,
+    title: str,
+    source_srt_path: Path,
+    translated_srt_path: Path,
+) -> str:
+    return (
+        template.replace("<SOURCE_LANG>", source_lang)
+        .replace("<TARGET_LANG>", target_lang)
+        .replace("<TITLE>", title)
+        .replace("<SOURCE_SRT_PATH>", str(source_srt_path))
+        .replace("<TRANSLATED_SRT_PATH>", str(translated_srt_path))
+    )
+
+
 _TOKENS_USED_RE = re.compile(r"\s+tokens used\b.*$", re.IGNORECASE)
 
 
@@ -191,7 +222,22 @@ def main() -> None:
     parser.add_argument("--min-duration", type=float, default=0.8, help="Minimum cue duration (seconds)")
     parser.add_argument("--write-vtt", action="store_true", help="Also write VTT")
     parser.add_argument("--dry-run", action="store_true", help="Skip Codex call and echo input")
-    parser.add_argument("--keep-chunks", action="store_true", help="Keep chunk temp files")
+    parser.add_argument("--keep-chunks", action="store_true", default=True, help="Keep chunk temp files (default: True)")
+    parser.add_argument("--no-keep-chunks", dest="keep_chunks", action="store_false", help="Delete chunk temp files after processing")
+    parser.add_argument(
+        "--validation-pass",
+        dest="validation_pass",
+        action="store_true",
+        default=True,
+        help="Run Claude Code validation pass after merge (default: True)",
+    )
+    parser.add_argument("--no-validation-pass", dest="validation_pass", action="store_false", help="Skip validation pass")
+    parser.add_argument(
+        "--validation-template",
+        type=Path,
+        default=Path(__file__).resolve().parent.parent / "references" / "validation-prompt-template.md",
+        help="Prompt template for validation pass",
+    )
     args = parser.parse_args()
 
     if args.merge_prompts_only and not args.merge_pass:
@@ -280,9 +326,24 @@ def main() -> None:
         logger.info(f"Translation completed in {translation_elapsed:.1f}s ({translation_elapsed/60:.1f} min)")
 
     translated_chunks: list[tuple[float, float, list[SrtEntry]]] = []
-    for (chunk_start, chunk_end, _chunk_path), output_path in zip(chunk_specs, output_paths):
+    for idx, ((chunk_start, chunk_end, _chunk_path), output_path) in enumerate(zip(chunk_specs, output_paths), start=1):
         translated_entries = parse_srt(output_path)
+        pre_filter_count = len(translated_entries)
         translated_entries = _filter_entries(translated_entries, chunk_start, chunk_end)
+        post_filter_count = len(translated_entries)
+        if post_filter_count == 0 and pre_filter_count > 0:
+            logger.error(
+                f"CRITICAL: Chunk {idx} translation has {pre_filter_count} entries but ALL were filtered out! "
+                f"Expected timestamp range: {chunk_start:.1f}s-{chunk_end:.1f}s. "
+                f"Check {output_path} - LLM may have reset timestamps to 00:00:00."
+            )
+        elif post_filter_count == 0:
+            logger.warning(f"Chunk {idx} translation produced no entries (output: {output_path})")
+        elif post_filter_count < pre_filter_count * 0.5:
+            logger.warning(
+                f"Chunk {idx}: {pre_filter_count - post_filter_count} of {pre_filter_count} entries filtered out "
+                f"(outside {chunk_start:.1f}s-{chunk_end:.1f}s range)"
+            )
         translated_entries = _dedupe_entries_keep_last(translated_entries)
         translated_chunks.append((chunk_start, chunk_end, translated_entries))
 
@@ -360,12 +421,27 @@ def main() -> None:
 
         if not args.merge_prompts_only:
             repaired_chunks: list[tuple[float, float, list[SrtEntry]]] = []
-            for start_s, end_s, source_entries, candidate_entries, output_path in merge_specs:
+            for idx, (start_s, end_s, source_entries, candidate_entries, output_path) in enumerate(merge_specs, start=1):
                 translated_entries = parse_srt(output_path)
+                pre_filter_count = len(translated_entries)
                 translated_entries = _filter_entries(translated_entries, start_s, end_s)
+                post_filter_count = len(translated_entries)
+                if post_filter_count == 0 and pre_filter_count > 0:
+                    logger.error(
+                        f"CRITICAL: Merge chunk {idx} has {pre_filter_count} entries but ALL were filtered out! "
+                        f"Expected timestamp range: {start_s:.1f}s-{end_s:.1f}s. "
+                        f"Check {output_path} - LLM may have reset timestamps."
+                    )
+                elif post_filter_count == 0:
+                    logger.warning(f"Merge chunk {idx} produced no entries, falling back to candidate (output: {output_path})")
                 translated_entries = _dedupe_entries_keep_last(translated_entries)
                 if not translated_entries:
                     translated_entries = candidate_entries
+                    if not candidate_entries:
+                        logger.error(
+                            f"CRITICAL: Merge chunk {idx} ({start_s:.1f}s-{end_s:.1f}s) has no translation! "
+                            f"Source has {len(source_entries)} cues but candidate is empty."
+                        )
                 # Note: _align_entries_to_source and normalize_entries removed
                 # - align caused English fallback when timestamps didn't match
                 # - normalize split semantic units unnecessarily
@@ -375,9 +451,48 @@ def main() -> None:
 
     write_srt(merged, args.output)
     logger.info(f"Output written: {args.output} ({len(merged)} entries)")
+
+    # Validation pass with Claude Code
+    if args.validation_pass and not args.dry_run and not args.merge_prompts_only:
+        logger.info("=" * 50)
+        logger.info("Starting validation pass with Claude Code...")
+        validation_start = time.time()
+
+        validation_template = args.validation_template.read_text(encoding="utf-8")
+        validation_prompt = _render_validation_prompt(
+            template=validation_template,
+            source_lang=args.source_lang,
+            target_lang=args.target_lang,
+            title=title,
+            source_srt_path=args.input,
+            translated_srt_path=args.output,
+        )
+        validation_dir = out_dir / f"validation_{args.target_lang}"
+        validation_dir.mkdir(parents=True, exist_ok=True)
+        validation_prompt_path = validation_dir / "validation_prompt.txt"
+        validation_prompt_path.write_text(validation_prompt, encoding="utf-8")
+
+        try:
+            validation_output = _run_claude(validation_prompt_path)
+            validation_log_path = validation_dir / "validation_result.txt"
+            validation_log_path.write_text(validation_output, encoding="utf-8")
+            validation_elapsed = time.time() - validation_start
+            logger.info(f"Validation pass completed in {validation_elapsed:.1f}s")
+            logger.info(f"Validation result saved: {validation_log_path}")
+
+            # Re-read the potentially modified output file
+            validated_entries = parse_srt(args.output)
+            if len(validated_entries) != len(merged):
+                logger.info(f"Validation modified output: {len(merged)} -> {len(validated_entries)} entries")
+        except Exception as e:
+            logger.warning(f"Validation pass failed: {e}")
+            logger.warning("Continuing with unvalidated output")
+
     if args.write_vtt:
+        # Re-read in case validation modified the file
+        final_entries = parse_srt(args.output)
         vtt_path = args.output.with_suffix(".vtt")
-        write_vtt(merged, vtt_path)
+        write_vtt(final_entries, vtt_path)
         logger.info(f"VTT written: {vtt_path}")
 
     keep_artifacts = args.keep_chunks or args.merge_prompts_only

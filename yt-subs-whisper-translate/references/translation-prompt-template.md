@@ -16,10 +16,13 @@ Video context:
 
 Rules:
 - Output valid SRT only (no commentary).
-- Keep timestamps aligned with the input. If splitting a cue, divide the
-  original time range proportionally.
+- CRITICAL: Keep the EXACT timestamps from the input SRT. Do NOT modify,
+  shift, or reset timestamps. The output must use the same absolute
+  timestamps as the input (e.g., if input starts at 00:02:30, output must
+  also start at 00:02:30, NOT 00:00:00).
+- If splitting a cue, divide the original time range proportionally.
 - One text line per cue. No line breaks inside a cue.
-- Do not summarize, shorten, or omit content.
+- Do not summarize, shorten, or omit content. Translate ALL cues.
 - Preserve names and terminology. Use the video context to handle
   proper nouns.
 - Break cues at natural semantic boundaries (phrases, clauses).
