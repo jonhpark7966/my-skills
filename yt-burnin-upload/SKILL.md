@@ -1,13 +1,13 @@
 ---
 name: yt-burnin-upload
-description: Download best-quality YouTube video/audio, burn in Korean subtitles (single line), then upload via YouTube Data API with Korean-translated title/description and unlisted privacy. Use when a user wants a hard-subbed version uploaded to a YouTube archive account.
+description: Download best-quality YouTube video/audio, burn in Korean subtitles with optional English subtitles above (dual-subtitle mode), then upload via YouTube Data API with Korean-translated title/description and unlisted privacy. Use when a user wants a hard-subbed version uploaded to a YouTube archive account.
 ---
 
 # yt-burnin-upload
 
 ## Overview
 
-Create a high-quality hard-subbed video for an archive account with Korean-only subtitles (single line).
+Create a high-quality hard-subbed video for an archive account with Korean subtitles (bottom, orange) and optional English subtitles above (cyan).
 
 ## Prerequisites
 
@@ -22,8 +22,10 @@ This will generate `ko.srt` in the output folder, which you can then use with th
 ## Quick start
 
 ```bash
-python3 scripts/yt_burnin_upload.py "<YOUTUBE_URL>" --ko-srt path/to/ko.srt
+python3 scripts/yt_burnin_upload.py "<YOUTUBE_URL>" --ko-srt path/to/ko.srt --en-srt path/to/en.srt
 ```
+
+Both `--ko-srt` and `--en-srt` are required by default for dual-subtitle burn-in.
 
 ## Workflow
 
@@ -43,30 +45,33 @@ yt-dlp -f "bv*+ba/b" -o "source.%(ext)s" "<URL>"
 ## Step 2: Prepare subtitle files
 
 Inputs:
-- `ko.srt` / `ko.vtt` for Korean output.
+- `ko.srt` / `ko.vtt` for Korean subtitles (required).
+- `en.srt` / `en.vtt` for English subtitles (optional).
 
 Rules:
 - One line per cue, no line breaks.
 - Do not shorten or summarize; split long cues by time if needed.
 
-English subtitles are intentionally not burned in.
-
 ## Step 3: Burn in subtitles
 
-The script automatically detects video resolution and scales font size accordingly:
+The script automatically detects video resolution and scales font/margin accordingly:
 
-| Resolution | FontSize | MarginV |
-|------------|----------|---------|
-| 720p       | 12       | 35      |
-| 1080p      | 15       | 50      |
-| 1440p      | 20       | 65      |
-| 4K+        | 27       | 90      |
+| Resolution | FontSize | Korean MarginV | English MarginV |
+|------------|----------|----------------|-----------------|
+| 720p       | 8        | 13             | 25              |
+| 1080p      | 12       | 20             | 38              |
+| 1440p      | 16       | 27             | 51              |
+| 4K         | 24       | 40             | 76              |
 
-Example (1080p):
+Color scheme:
+- **Korean**: #fe721a (orange) - bottom
+- **English**: #43d6a9 (cyan/teal) - above Korean
+
+Example (1080p, dual subtitles):
 
 ```bash
 ffmpeg -i source.mp4 \
-  -vf "subtitles=ko.srt:force_style='FontName=Noto Sans,FontSize=15,Outline=2,Shadow=1,Alignment=2,MarginV=50'" \
+  -vf "subtitles=ko.srt:force_style='FontName=Noto Sans CJK KR,FontSize=12,PrimaryColour=&H1A72FE,Outline=2,Shadow=1,Alignment=2,MarginV=20',subtitles=en.srt:force_style='FontName=Noto Sans,FontSize=12,PrimaryColour=&HA9D643,Outline=2,Shadow=1,Alignment=2,MarginV=38'" \
   -c:a copy burnin.mp4
 ```
 

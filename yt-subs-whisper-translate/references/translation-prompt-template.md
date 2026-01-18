@@ -23,8 +23,9 @@ Rules:
 - If splitting a cue, divide the original time range proportionally.
 - One text line per cue. No line breaks inside a cue.
 - Do not summarize, shorten, or omit content. Translate ALL cues.
-- Preserve names and terminology. Use the video context to handle
-  proper nouns.
+- IMPORTANT: If a proper noun in the input differs from the Title/Description
+  (e.g., "NIO" vs "NEO"), use the spelling from the Title/Description.
+  The video context is authoritative for proper nouns.
 - Break cues at natural semantic boundaries (phrases, clauses).
   Avoid splitting in the middle of a noun phrase or verb phrase.
 - For Korean output: use formal polite style (존댓말/합쇼체). End

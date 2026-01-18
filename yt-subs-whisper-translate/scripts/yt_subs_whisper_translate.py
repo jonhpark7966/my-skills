@@ -256,6 +256,7 @@ def _whisper_transcribe(
     word_timestamps: bool,
     max_words_per_line: int | None,
     max_line_count: int | None,
+    initial_prompt: str | None = None,
 ) -> Path:
     _require_exe("whisper")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -276,6 +277,8 @@ def _whisper_transcribe(
     ]
     if language:
         cmd.extend(["--language", language])
+    if initial_prompt:
+        cmd.extend(["--initial_prompt", initial_prompt])
     if word_timestamps:
         cmd.extend(["--word_timestamps", "True"])
         if max_words_per_line:
@@ -571,6 +574,16 @@ def main() -> None:
             if candidate_whisper.exists():
                 source_srt_path.write_text(candidate_whisper.read_text(encoding="utf-8"), encoding="utf-8")
             else:
+                # Build initial prompt from metadata for better proper noun recognition
+                title = meta.get("title", "") or ""
+                description = meta.get("description", "") or ""
+                initial_prompt = None
+                if title or description:
+                    # Truncate description to avoid overly long prompts
+                    desc_short = description[:300] if description else ""
+                    initial_prompt = f"Title: {title}. {desc_short}"
+                    logger.info(f"Whisper initial_prompt: {initial_prompt[:100]}...")
+
                 whisper_srt = _whisper_transcribe(
                     audio_path,
                     out_dir,
@@ -579,6 +592,7 @@ def main() -> None:
                     args.whisper_word_timestamps,
                     args.whisper_max_words,
                     args.whisper_max_line_count,
+                    initial_prompt=initial_prompt,
                 )
                 source_srt_path.write_text(whisper_srt.read_text(encoding="utf-8"), encoding="utf-8")
 
