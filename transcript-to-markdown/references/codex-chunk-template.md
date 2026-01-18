@@ -18,6 +18,12 @@ Rules:
 - Use sub-bullets for supporting details.
 - If a chapter title is provided, use it as the section heading.
 
+Minimum output requirements:
+- Generate at least 15 bullet points per 10 minutes of transcript.
+- Include at least 1-2 blockquotes per 10 minutes for key statements.
+- Do NOT compress or merge multiple ideas into a single bullet point.
+- Each distinct idea or fact deserves its own bullet point.
+
 Transcript:
 <<<
 <TRANSCRIPT>

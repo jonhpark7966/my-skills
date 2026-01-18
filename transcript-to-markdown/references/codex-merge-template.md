@@ -19,10 +19,16 @@ Rules:
   `- [MM:SS] <Detailed note>`
 - Preserve all blockquotes (key statements) from the chunks:
   > "[MM:SS] Quote"
-- Remove duplicate content from overlapping regions.
 - Maintain chronological order by timestamps.
-- Do not omit important information; keep notes detailed.
 - Do not add sections beyond summary and chapters.
+
+Information retention (CRITICAL):
+- ONLY remove exact duplicates from overlapping regions (same timestamp, same content).
+- Do NOT summarize or condense non-duplicate content.
+- Each chunk's bullet points must be preserved at least 80%.
+- Each 10-minute section must have at least 15 bullet points.
+- Total output length must be at least 70% of combined input length.
+- When in doubt, KEEP the information rather than omitting it.
 
 Chunk outputs:
 <<<
