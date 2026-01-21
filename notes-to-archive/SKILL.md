@@ -71,6 +71,11 @@ Do NOT use generic tags like "Video Archive".
 
 Follow the schema in `references/archive-schema.md`.
 
+### IMPORTANT: Get today's date correctly
+
+Before setting the date field, **run `date +%Y-%m-%d`** to get the actual current date.
+Do NOT rely on your internal knowledge of the date - AI models often have incorrect date information due to training data cutoffs.
+
 Frontmatter structure:
 ```yaml
 ---
@@ -79,7 +84,7 @@ description: |
   1. First summary line
   2. Second summary line
   3. Third summary line
-date: YYYY-MM-DD (today)
+date: YYYY-MM-DD  # Use the result from `date +%Y-%m-%d` command
 videoId: "uploaded_video_id"
 originalVideoId: "original_youtube_id"
 duration: "MM:SS" or "H:MM:SS"
