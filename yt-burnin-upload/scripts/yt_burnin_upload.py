@@ -66,24 +66,44 @@ def _yt_dlp_meta(url: str, output_path: Path) -> dict:
 
 
 def _download_best(url: str, out_dir: Path) -> Path:
+    """Download video with fallback formats if high-quality fails."""
     _require_exe("yt-dlp")
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / "source.mp4"
-    cmd = [
-        "yt-dlp",
-        "--no-playlist",
-        "-f",
-        "bv*+ba/b",
-        "--merge-output-format",
-        "mp4",
-        "-o",
-        str(out_path),
-        url,
+
+    # Format options to try in order (1080p → 720p → best available)
+    format_options = [
+        "bv[height<=1080]+ba/b",  # 1080p max
+        "bv[height<=720]+ba/b",   # 720p fallback
+        "b",                       # best single file
     ]
-    _run(cmd)
-    if not out_path.exists():
-        raise RuntimeError(f"Download finished but {out_path} not found")
-    return out_path
+
+    last_error = None
+    for fmt in format_options:
+        # Clean up any partial files from previous attempts
+        for partial in out_dir.glob("source.*"):
+            partial.unlink()
+
+        cmd = [
+            "yt-dlp",
+            "--no-playlist",
+            "-f", fmt,
+            "--merge-output-format", "mp4",
+            "--no-cache-dir",
+            "-o", str(out_path),
+            url,
+        ]
+        try:
+            _run(cmd)
+            if out_path.exists():
+                print(f"Download succeeded with format: {fmt}")
+                return out_path
+        except subprocess.CalledProcessError as e:
+            last_error = e
+            print(f"Download failed with format '{fmt}': {e}")
+            continue
+
+    raise RuntimeError(f"All download attempts failed. Last error: {last_error}")
 
 
 def _escape_sub_path(path: Path) -> str:
