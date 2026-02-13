@@ -433,6 +433,10 @@ def main() -> None:
     ko_title = translated.get("title", title)
     ko_description = translated.get("description", description)
 
+    # Prepend original video URL to description
+    if args.url:
+        ko_description = f"원본 영상: {args.url}\n\n{ko_description}"
+
     if args.upload:
         if not args.client_secret:
             raise RuntimeError("OAuth client secret path is required for upload")
