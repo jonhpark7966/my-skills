@@ -12,7 +12,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from srt_utils import SrtEntry, chunk_entries, format_srt, parse_srt, write_srt, write_vtt
+from srt_utils import SrtEntry, chunk_entries, format_srt, parse_srt, validate_entries, write_srt, write_vtt
 
 # Setup logging
 logging.basicConfig(
@@ -326,8 +326,10 @@ def main() -> None:
         logger.info(f"Translation completed in {translation_elapsed:.1f}s ({translation_elapsed/60:.1f} min)")
 
     translated_chunks: list[tuple[float, float, list[SrtEntry]]] = []
+    source_entries_for_chunk = {idx: chunk.entries for idx, chunk in enumerate(chunks, start=1)}
     for idx, ((chunk_start, chunk_end, _chunk_path), output_path) in enumerate(zip(chunk_specs, output_paths), start=1):
         translated_entries = parse_srt(output_path)
+        translated_entries = validate_entries(translated_entries, source_entries=source_entries_for_chunk.get(idx))
         pre_filter_count = len(translated_entries)
         translated_entries = _filter_entries(translated_entries, chunk_start, chunk_end)
         post_filter_count = len(translated_entries)
@@ -423,6 +425,7 @@ def main() -> None:
             repaired_chunks: list[tuple[float, float, list[SrtEntry]]] = []
             for idx, (start_s, end_s, source_entries, candidate_entries, output_path) in enumerate(merge_specs, start=1):
                 translated_entries = parse_srt(output_path)
+                translated_entries = validate_entries(translated_entries, source_entries=source_entries)
                 pre_filter_count = len(translated_entries)
                 translated_entries = _filter_entries(translated_entries, start_s, end_s)
                 post_filter_count = len(translated_entries)
@@ -448,6 +451,12 @@ def main() -> None:
                 repaired_chunks.append((start_s, end_s, translated_entries))
 
             merged = _merge_chunks(repaired_chunks, args.merge_overlap_seconds)
+
+    # Final validation against all source entries
+    pre_validate_count = len(merged)
+    merged = validate_entries(merged, source_entries=entries)
+    if len(merged) != pre_validate_count:
+        logger.info(f"Final validation adjusted {pre_validate_count - len(merged)} entries")
 
     write_srt(merged, args.output)
     logger.info(f"Output written: {args.output} ({len(merged)} entries)")

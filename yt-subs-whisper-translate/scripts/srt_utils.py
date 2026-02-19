@@ -171,6 +171,75 @@ def normalize_entries(
     return normalized
 
 
+MAX_CUE_DURATION_S = 15.0  # No single subtitle cue should last longer than this
+
+
+def validate_entries(
+    entries: list[SrtEntry],
+    source_entries: list[SrtEntry] | None = None,
+    max_cue_duration: float = MAX_CUE_DURATION_S,
+) -> list[SrtEntry]:
+    """Validate and auto-repair translated subtitle timestamps.
+
+    Catches issues like hour-field typos (01:01:00 instead of 00:01:00)
+    and unreasonably long cue durations.
+    """
+    if not entries:
+        return entries
+
+    # Determine expected time range from source entries
+    source_max_s = max(e.end_s for e in source_entries) if source_entries else None
+
+    repaired: list[SrtEntry] = []
+    for entry in entries:
+        start_s = entry.start_s
+        end_s = entry.end_s
+        fixed = False
+
+        # Fix: end before start
+        if end_s <= start_s:
+            end_s = start_s + 2.0
+            fixed = True
+
+        duration = end_s - start_s
+
+        # Fix: hour-field offset error (e.g. 01:01:00 instead of 00:01:00)
+        # If duration is unreasonably long and subtracting 3600 from end_s fixes it,
+        # the hour digit was likely wrong.
+        if duration > max_cue_duration:
+            for hour_offset in (3600, 7200):
+                candidate_end = end_s - hour_offset
+                if candidate_end > start_s and (candidate_end - start_s) <= max_cue_duration:
+                    end_s = candidate_end
+                    fixed = True
+                    break
+                candidate_start = start_s - hour_offset
+                if candidate_start >= 0 and end_s > candidate_start and (end_s - candidate_start) <= max_cue_duration:
+                    start_s = candidate_start
+                    fixed = True
+                    break
+
+        # Fix: if still too long after hour-offset repair, clamp duration
+        if (end_s - start_s) > max_cue_duration:
+            end_s = start_s + max_cue_duration
+            fixed = True
+
+        # Fix: timestamps far beyond source range (likely hour-field error in both)
+        if source_max_s is not None and start_s > source_max_s + 60:
+            corrected_start = start_s % 3600
+            corrected_end = end_s % 3600 if end_s > 3600 else end_s
+            if corrected_start < source_max_s + 60:
+                start_s = corrected_start
+                end_s = corrected_end
+                if end_s <= start_s:
+                    end_s = start_s + 2.0
+                fixed = True
+
+        repaired.append(SrtEntry(start_s=start_s, end_s=end_s, text=entry.text))
+
+    return repaired
+
+
 def chunk_entries(
     entries: list[SrtEntry],
     chunk_seconds: float,

@@ -12,6 +12,9 @@ Video context:
 - Additional context: <EXTRA_CONTEXT>
 
 Rules:
+- CRITICAL: Output the translated SRT directly as text in your response.
+  Do NOT use any tools, shell commands, or file operations. Do NOT write
+  to any files. Just output the SRT text below.
 - Output valid SRT only (no commentary).
 - Use the timestamps from the source SRT. Do not add or remove cues.
 - One text line per cue. No line breaks inside a cue.
